@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <PackageReference Include="Com.Ctrip.Framework.Apollo.Configuration" Version="$(ApolloConfigurationVersion)" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Raindrop.AppConfiguration\Raindrop.AppConfiguration.csproj" />
+  </ItemGroup>
+
+</Project>

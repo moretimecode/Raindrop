@@ -1,0 +1,39 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/MediatR/MediatR.csproj" />
+    <Project Path="src/Raindrop.Data/Raindrop.Data.csproj" />
+    <Project Path="src/Raindrop.Data.EFCore/Raindrop.Data.EFCore.csproj" />
+    <Project Path="src/Raindrop.EventBus.Abstractions/Raindrop.EventBus.Abstractions.csproj" />
+    <Project Path="src/Raindrop.EventBus.Core/Raindrop.EventBus.Core.csproj" />
+    <Project Path="src/Raindrop.EventBus.MediatR/Raindrop.EventBus.MediatR.csproj" />
+    <Project Path="src/Raindrop.EventBus.RabbitMQ/Raindrop.EventBus.RabbitMQ.csproj" />
+    <Project Path="src/Raindrop.UnitOfWork.Abstractions/Raindrop.UnitOfWork.Abstractions.csproj" />
+    <Project Path="src/Raindrop.Utility/Raindrop.Utility.csproj" />
+    <Project Path="src/Raindrop.Observability.Abstractions/Raindrop.Observability.Abstractions.csproj" />
+    <Project Path="src/Raindrop.AspNetCore/Raindrop.AspNetCore.csproj" />
+    <Project Path="src/Raindrop.AppConfiguration.Abstractions/Raindrop.AppConfiguration.Abstractions.csproj" />
+    <Project Path="src/Raindrop.AppConfiguration/Raindrop.AppConfiguration.csproj" />
+    <Project Path="src/Raindrop.AppConfiguration.Apollo/Raindrop.AppConfiguration.Apollo.csproj" />
+    <Project Path="src/Raindrop.AppConfiguration.Database/Raindrop.AppConfiguration.Database.csproj" />
+    <Project Path="src/Raindrop.AppConfiguration.Database.EFCore/Raindrop.AppConfiguration.Database.EFCore.csproj" />
+    <Project Path="src/Raindrop.CQRS/Raindrop.CQRS.csproj" />
+    <Project Path="src/Raindrop.CQRS.FluentValidation/Raindrop.CQRS.FluentValidation.csproj" />
+  </Folder>
+  <Folder Name="/test/">
+    <Project Path="test/Raindrop.AppConfiguration.Tests/Raindrop.AppConfiguration.Tests.csproj" />
+    <Project Path="test/Raindrop.Data.Tests/Raindrop.Data.Tests.csproj" />
+    <Project Path="test/Raindrop.EventBus.Tests/Raindrop.EventBus.Tests.csproj" />
+    <Project Path="test/Raindrop.AspNetCore.Tests/Raindrop.AspNetCore.Tests.csproj" />
+    <Project Path="test/Raindrop.CQRS.Tests/Raindrop.CQRS.Tests.csproj" />
+    <Project Path="test/Raindrop.CQRS.FluentValidation.Tests/Raindrop.CQRS.FluentValidation.Tests.csproj" />
+  </Folder>
+  <Folder Name="/sample/">
+    <Project Path="sample/Raindrop.AppConfiguration/Raindrop.AppConfiguration.Sample.csproj" />
+    <Project Path="sample/Raindrop.AppConfiguration.Database/Raindrop.AppConfiguration.Database.Sample.csproj" />
+    <Project Path="sample/Raindrop.AppConfiguration.Database.EFCore/Raindrop.AppConfiguration.Database.EFCore.Sample.csproj" />
+    <Project Path="sample/Raindrop.AspNetCore/Raindrop.AspNetCore.Sample.csproj" />
+    <Project Path="sample/Raindrop.CQRS/Raindrop.CQRS.Sample.csproj" />
+    <Project Path="sample/Raindrop.Data/Raindrop.Data.Sample.csproj" />
+    <Project Path="sample/Raindrop.EventBus.MediatR/Raindrop.EventBus.MediatR.Sample.csproj" />
+  </Folder>
+</Solution>

@@ -1,0 +1,29 @@
+<Project>
+  <PropertyGroup>
+    <!-- ── 编译 ── -->
+    <RaindropTargetFramework>net10.0</RaindropTargetFramework>
+    <TargetFramework>$(RaindropTargetFramework)</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+
+    <!-- ── 调试信息 ── -->
+    <DebugType>portable</DebugType>
+    <DebugSymbols>true</DebugSymbols>
+  </PropertyGroup>
+
+  <PropertyGroup Label="Package Versions">
+    <ApolloConfigurationVersion>2.11.0</ApolloConfigurationVersion>
+    <CoverletCollectorVersion>6.0.4</CoverletCollectorVersion>
+    <MapsterVersion>7.4.0</MapsterVersion>
+    <MediatRSourceVersion>12.5.0</MediatRSourceVersion>
+    <MicrosoftEntityFrameworkCoreVersion>9.0.0</MicrosoftEntityFrameworkCoreVersion>
+    <MicrosoftExtensionsVersion>10.0.0</MicrosoftExtensionsVersion>
+    <MicrosoftNetTestSdkVersion>17.14.1</MicrosoftNetTestSdkVersion>
+    <NpgsqlEntityFrameworkCorePostgreSqlVersion>9.0.0</NpgsqlEntityFrameworkCorePostgreSqlVersion>
+    <OpenTelemetryVersion>1.17.0</OpenTelemetryVersion>
+    <RabbitMqClientVersion>5.1.0</RabbitMqClientVersion>
+    <XunitVersion>2.9.3</XunitVersion>
+    <XunitRunnerVisualStudioVersion>3.1.4</XunitRunnerVisualStudioVersion>
+    <FluentValidationVersion>12.1.1</FluentValidationVersion>
+  </PropertyGroup>
+</Project>

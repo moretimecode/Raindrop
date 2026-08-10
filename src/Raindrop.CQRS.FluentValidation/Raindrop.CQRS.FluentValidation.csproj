@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <Description>Raindrop CQRS FluentValidation pipeline behavior integration.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Raindrop.CQRS.FluentValidation.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="FluentValidation" Version="$(FluentValidationVersion)" />
+    <PackageReference Include="Microsoft.Extensions.Options" Version="$(MicrosoftExtensionsVersion)" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Raindrop.CQRS\Raindrop.CQRS.csproj" />
+    <ProjectReference Include="..\Raindrop.Utility\Raindrop.Utility.csproj" />
+  </ItemGroup>
+
+</Project>

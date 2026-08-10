@@ -1,0 +1,26 @@
+<Project>
+  <!-- 先导入根 Directory.Build.props（TargetFramework 等基础属性） -->
+  <Import Project="$([MSBuild]::GetPathOfFileAbove('Directory.Build.props', '$(MSBuildThisFileDirectory)../'))" />
+
+  <PropertyGroup>
+    <!-- ── NuGet 打包（仅 src） ── -->
+    <IsPackable>true</IsPackable>
+    <GeneratePackageOnBuild>false</GeneratePackageOnBuild>
+
+    <Version>0.1.1</Version>
+    <Authors>rain lan</Authors>
+
+    <PackageProjectUrl>https://github.com/rain-lan/Raindrop</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/rain-lan/Raindrop</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
+
+    <PackageTags>Raindrop;DDD;CQRS;EventBus;MediatR;Microservice</PackageTags>
+
+    <!-- 源码链接 -->
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+  </PropertyGroup>
+</Project>

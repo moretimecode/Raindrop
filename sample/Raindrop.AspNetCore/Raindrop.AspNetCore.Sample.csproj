@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Raindrop.AspNetCore\Raindrop.AspNetCore.csproj" />
+    <ProjectReference Include="..\..\src\Raindrop.Observability.Abstractions\Raindrop.Observability.Abstractions.csproj" />
+    <ProjectReference Include="..\..\src\Raindrop.Utility\Raindrop.Utility.csproj" />
+  </ItemGroup>
+
+</Project>
