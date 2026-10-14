@@ -6,12 +6,12 @@ namespace Raindrop.AppConfiguration.Tests;
 public class RabbitMqTopologyDeclarerTests
 {
     [Fact]
-    public void Declare_ForExchangeAndRoutingKey_CreatesMainAndDeadLetterExchanges()
+    public async Task Declare_ForExchangeAndRoutingKey_CreatesMainAndDeadLetterExchanges()
     {
         var channel = new StubRabbitMqChannel();
         var declarer = new RabbitMqTopologyDeclarer();
 
-        declarer.Declare(channel, "order", "order.created");
+        await declarer.DeclareAsync(channel, "order", "order.created");
 
         var exchanges = channel.DeclaredExchanges.Select(e => e.Name).ToArray();
         Assert.Contains("order", exchanges);
@@ -19,12 +19,12 @@ public class RabbitMqTopologyDeclarerTests
     }
 
     [Fact]
-    public void Declare_ForExchangeAndRoutingKey_DeclaresExchangesAsDirectAndDurable()
+    public async Task Declare_ForExchangeAndRoutingKey_DeclaresExchangesAsDirectAndDurable()
     {
         var channel = new StubRabbitMqChannel();
         var declarer = new RabbitMqTopologyDeclarer();
 
-        declarer.Declare(channel, "order", "order.created");
+        await declarer.DeclareAsync(channel, "order", "order.created");
 
         Assert.All(channel.DeclaredExchanges, e =>
         {
@@ -35,12 +35,12 @@ public class RabbitMqTopologyDeclarerTests
     }
 
     [Fact]
-    public void Declare_ForExchangeAndRoutingKey_CreatesMainQueueWithDlx()
+    public async Task Declare_ForExchangeAndRoutingKey_CreatesMainQueueWithDlx()
     {
         var channel = new StubRabbitMqChannel();
         var declarer = new RabbitMqTopologyDeclarer();
 
-        declarer.Declare(channel, "order", "order.created");
+        await declarer.DeclareAsync(channel, "order", "order.created");
 
         var mainQueue = Assert.Single(
             channel.DeclaredQueues,
@@ -53,12 +53,12 @@ public class RabbitMqTopologyDeclarerTests
     }
 
     [Fact]
-    public void Declare_ForExchangeAndRoutingKey_CreatesRetryQueueWithDlxToMainExchange()
+    public async Task Declare_ForExchangeAndRoutingKey_CreatesRetryQueueWithDlxToMainExchange()
     {
         var channel = new StubRabbitMqChannel();
         var declarer = new RabbitMqTopologyDeclarer();
 
-        declarer.Declare(channel, "order", "order.created");
+        await declarer.DeclareAsync(channel, "order", "order.created");
 
         var retryQueue = Assert.Single(
             channel.DeclaredQueues,
@@ -71,12 +71,12 @@ public class RabbitMqTopologyDeclarerTests
     }
 
     [Fact]
-    public void Declare_ForExchangeAndRoutingKey_CreatesSharedDeadLetterQueue()
+    public async Task Declare_ForExchangeAndRoutingKey_CreatesSharedDeadLetterQueue()
     {
         var channel = new StubRabbitMqChannel();
         var declarer = new RabbitMqTopologyDeclarer();
 
-        declarer.Declare(channel, "payment", "payment.succeeded");
+        await declarer.DeclareAsync(channel, "payment", "payment.succeeded");
 
         var dlq = Assert.Single(
             channel.DeclaredQueues,
@@ -85,12 +85,12 @@ public class RabbitMqTopologyDeclarerTests
     }
 
     [Fact]
-    public void Declare_ForExchangeAndRoutingKey_BindsQueuesCorrectly()
+    public async Task Declare_ForExchangeAndRoutingKey_BindsQueuesCorrectly()
     {
         var channel = new StubRabbitMqChannel();
         var declarer = new RabbitMqTopologyDeclarer();
 
-        declarer.Declare(channel, "order", "order.created");
+        await declarer.DeclareAsync(channel, "order", "order.created");
 
         Assert.Contains(channel.Bindings,
             b => b.Queue == "raindrop:order:order.created"
@@ -104,13 +104,13 @@ public class RabbitMqTopologyDeclarerTests
     }
 
     [Fact]
-    public void Declare_DeclaringSameExchangeWithDifferentRoutingKey_CreatesSeparateQueues()
+    public async Task Declare_DeclaringSameExchangeWithDifferentRoutingKey_CreatesSeparateQueues()
     {
         var channel = new StubRabbitMqChannel();
         var declarer = new RabbitMqTopologyDeclarer();
 
-        declarer.Declare(channel, "order", "order.created");
-        declarer.Declare(channel, "order", "order.updated");
+        await declarer.DeclareAsync(channel, "order", "order.created");
+        await declarer.DeclareAsync(channel, "order", "order.updated");
 
         // 同一个 exchange 声明两次是幂等的（RabbitMQ 保证），两个 routing key 各一个队列
         Assert.Contains(channel.DeclaredQueues,
@@ -125,37 +125,47 @@ public class RabbitMqTopologyDeclarerTests
         public List<QueueDeclaration> DeclaredQueues { get; } = [];
         public List<BindingDeclaration> Bindings { get; } = [];
 
-        public void ExchangeDeclare(string exchange, string type, bool durable, bool autoDelete)
+        public Task ExchangeDeclareAsync(string exchange, string type, bool durable, bool autoDelete, CancellationToken cancellationToken = default)
         {
             DeclaredExchanges.Add(new ExchangeDeclaration(exchange, type, durable, autoDelete));
+            return Task.CompletedTask;
         }
 
-        public QueueDeclareOk QueueDeclare(
+        public Task<QueueDeclareOk> QueueDeclareAsync(
             string queue, bool durable, bool exclusive, bool autoDelete,
-            IDictionary<string, object>? arguments)
+            IDictionary<string, object?>? arguments, CancellationToken cancellationToken = default)
         {
             DeclaredQueues.Add(new QueueDeclaration(queue, durable, exclusive, autoDelete, arguments));
-            return new QueueDeclareOk(queue, 0, 0);
+            return Task.FromResult(new QueueDeclareOk(queue, 0, 0));
         }
 
-        public void QueueBind(string queue, string exchange, string routingKey)
+        public Task QueueBindAsync(string queue, string exchange, string routingKey, CancellationToken cancellationToken = default)
         {
             Bindings.Add(new BindingDeclaration(queue, exchange, routingKey));
+            return Task.CompletedTask;
         }
 
         public void Dispose() { }
 
-        public void BasicQos(uint prefetchSize, ushort prefetchCount, bool global) { }
+        public Task BasicQosAsync(uint prefetchSize, ushort prefetchCount, bool global, CancellationToken cancellationToken = default) => Task.CompletedTask;
 
-        public string BasicConsume(string queue, bool autoAck, IBasicConsumer consumer)
+        public Task<string> BasicConsumeAsync(string queue, bool autoAck, IAsyncBasicConsumer consumer, CancellationToken cancellationToken = default)
         {
-            return "stub";
+            return Task.FromResult("stub");
         }
 
-        public void BasicCancel(string consumerTag) { }
+        public Task BasicCancelAsync(string consumerTag, CancellationToken cancellationToken = default) => Task.CompletedTask;
+
+        public ValueTask BasicPublishAsync(string exchange, string routingKey, bool mandatory, BasicProperties properties, ReadOnlyMemory<byte> body, CancellationToken cancellationToken = default) => ValueTask.CompletedTask;
+
+        public ValueTask DisposeAsync()
+        {
+            Dispose();
+            return ValueTask.CompletedTask;
+        }
 
         public sealed record ExchangeDeclaration(string Name, string Type, bool Durable, bool AutoDelete);
-        public sealed record QueueDeclaration(string Name, bool Durable, bool Exclusive, bool AutoDelete, IDictionary<string, object>? Arguments);
+        public sealed record QueueDeclaration(string Name, bool Durable, bool Exclusive, bool AutoDelete, IDictionary<string, object?>? Arguments);
         public sealed record BindingDeclaration(string Queue, string Exchange, string RoutingKey);
     }
 }

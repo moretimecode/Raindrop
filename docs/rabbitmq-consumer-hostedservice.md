@@ -97,7 +97,7 @@ HostedService 启动时会：
 3. 按 `(exchange, routingKey, queue)` 分组。
 4. 为每组声明 exchange、主队列、重试队列、全局死信队列和 binding。
 5. 每组创建一个 consumer channel。
-6. 设置 `BasicQos(0, 1, false)`。
+6. 异步设置 `BasicQosAsync(0, 1, false)`。
 7. 使用 `autoAck: false` 启动 `AsyncEventingBasicConsumer`。
 
 收到消息后：
@@ -257,14 +257,15 @@ AddRabbitMqEventBus()
   -> AddRaindropEventHandlers(assemblies)
   -> AddEventBusCore<RabbitMqEventRouteResolver>()
   -> TryAddSingleton<RabbitMqEventBusOptions>
-  -> TryAddSingleton<IConnection>
+  -> TryAddSingleton<IRabbitMqConnection, RabbitMqConnectionAdapter>
   -> TryAddEnumerable<IEventTransport, RabbitMqEventTransport>
   -> AddRabbitMqDeadLetterRetry()
-  -> TryAddSingleton<IRabbitMqConnection, RabbitMqConnectionAdapter>
   -> TryAddSingleton<IRabbitMqTopologyDeclarer, RabbitMqTopologyDeclarer>
   -> TryAddSingleton<RabbitMqHostedService>
   -> TryAddEnumerable<IHostedService, RabbitMqHostedService>
 ```
+
+RabbitMQ.Client 7.x 使用异步连接和通道 API。适配器在首次创建通道时连接 Broker；DI 注册和解析不会等待网络连接。调用方可以预先注册 `IConnection`，适配器复用它并保留调用方的释放责任。默认注册不向 DI 暴露 `IConnection`；业务发布使用 `IEventBus.PublishAsync`。底层适配接口采用 `CreateChannelAsync`、`DeclareAsync` 等异步契约，并传递取消令牌。
 
 `AddRabbitMqDeadLetterRetry()` 会注册：
 
@@ -288,7 +289,7 @@ IRabbitMqConsumerExecutor -> RabbitMqConsumerExecutor
 
 | 行为 | 当前值 |
 |------|--------|
-| `BasicQos` | `prefetchCount = 1` |
+| `BasicQosAsync` | `prefetchCount = 1` |
 | `autoAck` | `false` |
 | 死信 exchange | `raindrop.dlx` |
 | 死信 queue | `raindrop.dlq` |

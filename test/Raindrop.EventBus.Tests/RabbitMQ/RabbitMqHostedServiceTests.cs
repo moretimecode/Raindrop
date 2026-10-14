@@ -106,6 +106,20 @@ public class RabbitMqHostedServiceTests
     }
 
     [Fact]
+    public async Task ExecuteTaskAsync_WhenTopologyDeclarationFails_DisposesCreatedChannel()
+    {
+        var connection = new StubConnection();
+        var declarer = new StubTopologyDeclarer { Failure = new InvalidOperationException("模拟拓扑声明失败") };
+        var service = new RabbitMqHostedService(
+            [typeof(OrderCreatedEvent).Assembly], connection, declarer, new StubExecutor(),
+            new RabbitMqDeadLetterRetryPolicyResolver(new RabbitMqDeadLetterRetryOptions()));
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => service.ExecuteTaskAsync(CancellationToken.None));
+
+        Assert.True(Assert.Single(connection.Channels).Disposed);
+    }
+
+    [Fact]
     public async Task DispatchToHandlerAsync_UsesExecutorWithoutCreatingOuterScope()
     {
         var executor = new StubExecutor();
@@ -351,10 +365,13 @@ public class RabbitMqHostedServiceTests
     private sealed class StubTopologyDeclarer : IRabbitMqTopologyDeclarer
     {
         public List<DeclaredGroup> DeclaredGroups { get; } = [];
+        public Exception? Failure { get; init; }
 
-        public void Declare(IRabbitMqChannel channel, string exchange, string routingKey, string? queue = null)
+        public Task DeclareAsync(IRabbitMqChannel channel, string exchange, string routingKey, string? queue = null, CancellationToken cancellationToken = default)
         {
+            if (Failure is not null) return Task.FromException(Failure);
             DeclaredGroups.Add(new DeclaredGroup(exchange, routingKey));
+            return Task.CompletedTask;
         }
     }
 
@@ -364,11 +381,11 @@ public class RabbitMqHostedServiceTests
     {
         public List<StubChannel> Channels { get; } = [];
 
-        public IRabbitMqChannel CreateChannel()
+        public Task<IRabbitMqChannel> CreateChannelAsync(CancellationToken cancellationToken = default)
         {
             var channel = new StubChannel();
             Channels.Add(channel);
-            return channel;
+            return Task.FromResult<IRabbitMqChannel>(channel);
         }
     }
 
@@ -379,26 +396,34 @@ public class RabbitMqHostedServiceTests
 
         public void Dispose() => Disposed = true;
 
-        public void ExchangeDeclare(string exchange, string type, bool durable, bool autoDelete) { }
+        public Task ExchangeDeclareAsync(string exchange, string type, bool durable, bool autoDelete, CancellationToken cancellationToken = default) => Task.CompletedTask;
 
-        public QueueDeclareOk QueueDeclare(
+        public Task<QueueDeclareOk> QueueDeclareAsync(
             string queue, bool durable, bool exclusive, bool autoDelete,
-            IDictionary<string, object>? arguments)
+            IDictionary<string, object?>? arguments, CancellationToken cancellationToken = default)
         {
-            return new QueueDeclareOk(queue, 0, 0);
+            return Task.FromResult(new QueueDeclareOk(queue, 0, 0));
         }
 
-        public void QueueBind(string queue, string exchange, string routingKey) { }
+        public Task QueueBindAsync(string queue, string exchange, string routingKey, CancellationToken cancellationToken = default) => Task.CompletedTask;
 
-        public void BasicQos(uint prefetchSize, ushort prefetchCount, bool global) { }
+        public Task BasicQosAsync(uint prefetchSize, ushort prefetchCount, bool global, CancellationToken cancellationToken = default) => Task.CompletedTask;
 
-        public string BasicConsume(string queue, bool autoAck, IBasicConsumer consumer)
+        public Task<string> BasicConsumeAsync(string queue, bool autoAck, IAsyncBasicConsumer consumer, CancellationToken cancellationToken = default)
         {
             ConsumerTag = $"stub-{queue}";
-            return ConsumerTag;
+            return Task.FromResult(ConsumerTag);
         }
 
-        public void BasicCancel(string consumerTag) { }
+        public Task BasicCancelAsync(string consumerTag, CancellationToken cancellationToken = default) => Task.CompletedTask;
+
+        public ValueTask BasicPublishAsync(string exchange, string routingKey, bool mandatory, BasicProperties properties, ReadOnlyMemory<byte> body, CancellationToken cancellationToken = default) => ValueTask.CompletedTask;
+
+        public ValueTask DisposeAsync()
+        {
+            Dispose();
+            return ValueTask.CompletedTask;
+        }
     }
 
     private sealed class StubScopeFactory : IServiceScopeFactory

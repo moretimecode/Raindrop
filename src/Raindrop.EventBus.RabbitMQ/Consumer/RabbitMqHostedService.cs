@@ -46,7 +46,7 @@ public sealed class RabbitMqHostedService : BackgroundService
         return ExecuteAsync(cancellationToken);
     }
 
-    protected override Task ExecuteAsync(CancellationToken stoppingToken)
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         var registrations = EventHandlerRegistrationScanner.Scan(_assemblies);
 
@@ -71,64 +71,72 @@ public sealed class RabbitMqHostedService : BackgroundService
 
         foreach (var group in groups)
         {
-            var channel = _connection.CreateChannel();
-            _declarer.Declare(channel, group.Key.Exchange, group.Key.RoutingKey, group.Key.QueueName);
-
-            var eventTypesInGroup = group.Select(x => x.eventType).ToArray();
-            var queueName = group.Key.QueueName;
-
-            channel.BasicQos(0, 1, global: false);
-
-            if (channel is RabbitMqChannelAdapter adapter)
+            var channel = await _connection.CreateChannelAsync(stoppingToken);
+            try
             {
-                var innerChannel = adapter.InnerChannel;
-                var consumer = new AsyncEventingBasicConsumer(innerChannel);
-                consumer.Received += async (_, args) =>
+                await _declarer.DeclareAsync(channel, group.Key.Exchange, group.Key.RoutingKey, group.Key.QueueName, stoppingToken);
+
+                var eventTypesInGroup = group.Select(x => x.eventType).ToArray();
+                var queueName = group.Key.QueueName;
+
+                await channel.BasicQosAsync(0, 1, global: false, stoppingToken);
+
+                if (channel is RabbitMqChannelAdapter adapter)
                 {
-                    await DispatchAsync(
-                        innerChannel,
-                        args,
-                        eventTypesInGroup,
-                        handlerMap,
-                        queueName,
-                        stoppingToken);
-                };
+                    var innerChannel = adapter.InnerChannel;
+                    var consumer = new AsyncEventingBasicConsumer(innerChannel);
+                    consumer.ReceivedAsync += async (_, args) =>
+                    {
+                        await DispatchAsync(
+                            innerChannel,
+                            args,
+                            eventTypesInGroup,
+                            handlerMap,
+                            queueName,
+                            stoppingToken);
+                    };
 
-                var consumerTag = channel.BasicConsume(queueName, autoAck: false, consumer);
-                _consumers.Add(new ConsumerHandle(channel, consumerTag));
+                    var consumerTag = await channel.BasicConsumeAsync(queueName, autoAck: false, consumer, stoppingToken);
+                    _consumers.Add(new ConsumerHandle(channel, consumerTag));
+                }
+                else
+                {
+                    _consumers.Add(new ConsumerHandle(channel, null));
+                }
             }
-            else
+            catch
             {
-                _consumers.Add(new ConsumerHandle(channel, null));
+                await channel.DisposeAsync();
+                throw;
             }
         }
-
-        return Task.CompletedTask;
     }
 
     public override async Task StopAsync(CancellationToken cancellationToken)
     {
+        await base.StopAsync(cancellationToken);
+
         while (_consumers.TryTake(out var handle))
         {
             try
             {
                 if (handle.ConsumerTag is not null)
                 {
-                    handle.Channel.BasicCancel(handle.ConsumerTag);
+                    await handle.Channel.BasicCancelAsync(handle.ConsumerTag, cancellationToken);
                 }
-
-                handle.Channel.Dispose();
             }
             catch
             {
             }
+            finally
+            {
+                await handle.Channel.DisposeAsync();
+            }
         }
-
-        await base.StopAsync(cancellationToken);
     }
 
     private async Task DispatchAsync(
-        IModel channel,
+        IChannel channel,
         BasicDeliverEventArgs args,
         Type[] eventTypesInGroup,
         Dictionary<Type, List<Type>> handlerMap,
@@ -138,20 +146,20 @@ public sealed class RabbitMqHostedService : BackgroundService
         var typeName = args.BasicProperties?.Type;
         if (string.IsNullOrWhiteSpace(typeName))
         {
-            channel.BasicReject(args.DeliveryTag, false);
+            await channel.BasicRejectAsync(args.DeliveryTag, false, cancellationToken);
             return;
         }
 
         var eventType = eventTypesInGroup.FirstOrDefault(t => t.AssemblyQualifiedName == typeName);
         if (eventType is null)
         {
-            channel.BasicReject(args.DeliveryTag, false);
+            await channel.BasicRejectAsync(args.DeliveryTag, false, cancellationToken);
             return;
         }
 
         if (!handlerMap.TryGetValue(eventType, out var handlerTypes) || handlerTypes.Count == 0)
         {
-            channel.BasicReject(args.DeliveryTag, false);
+            await channel.BasicRejectAsync(args.DeliveryTag, false, cancellationToken);
             return;
         }
 
@@ -159,24 +167,24 @@ public sealed class RabbitMqHostedService : BackgroundService
         try
         {
             eventData = JsonSerializer.Deserialize(
-                Encoding.UTF8.GetString(args.Body),
+                Encoding.UTF8.GetString(args.Body.Span),
                 eventType) as IEvent;
         }
         catch
         {
-            channel.BasicReject(args.DeliveryTag, false);
+            await channel.BasicRejectAsync(args.DeliveryTag, false, cancellationToken);
             return;
         }
 
         if (eventData is null)
         {
-            channel.BasicReject(args.DeliveryTag, false);
+            await channel.BasicRejectAsync(args.DeliveryTag, false, cancellationToken);
             return;
         }
 
         if (args.BasicProperties is null)
         {
-            channel.BasicReject(args.DeliveryTag, false);
+            await channel.BasicRejectAsync(args.DeliveryTag, false, cancellationToken);
             return;
         }
 
@@ -186,7 +194,7 @@ public sealed class RabbitMqHostedService : BackgroundService
         IRabbitMqReceivedMessage message = new RabbitMqReceivedMessage(
             channel,
             args.DeliveryTag,
-            (byte[])args.Body.Clone(),
+            args.Body.ToArray(),
             args.BasicProperties,
             failedCount,
             retryQueue);

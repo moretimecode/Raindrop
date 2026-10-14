@@ -6,18 +6,18 @@ namespace Raindrop.EventBus.RabbitMQ;
 
 public sealed class RabbitMqReceivedMessage : IRabbitMqReceivedMessage
 {
-    private readonly IModel _channel;
+    private readonly IChannel _channel;
     private readonly ulong _deliveryTag;
     private readonly byte[] _body;
-    private readonly IBasicProperties _properties;
+    private readonly IReadOnlyBasicProperties _properties;
     private readonly string _retryQueue;
-    private readonly Lock _syncRoot = new();
+    private readonly SemaphoreSlim _syncRoot = new(1, 1);
 
     public RabbitMqReceivedMessage(
-        IModel channel,
+        IChannel channel,
         ulong deliveryTag,
         byte[] body,
-        IBasicProperties properties,
+        IReadOnlyBasicProperties properties,
         int failedCount,
         string retryQueue)
     {
@@ -40,7 +40,7 @@ public sealed class RabbitMqReceivedMessage : IRabbitMqReceivedMessage
 
     public int FailedCount { get; }
 
-    public static int ReadFailedCount(IBasicProperties properties)
+    public static int ReadFailedCount(IReadOnlyBasicProperties properties)
     {
         ArgumentNullException.ThrowIfNull(properties);
 
@@ -59,21 +59,25 @@ public sealed class RabbitMqReceivedMessage : IRabbitMqReceivedMessage
         };
     }
 
-    public Task AckAsync(CancellationToken cancellationToken = default)
+    public async Task AckAsync(CancellationToken cancellationToken = default)
     {
-        lock (_syncRoot)
+        await _syncRoot.WaitAsync(cancellationToken);
+        try
         {
-            _channel.BasicAck(_deliveryTag, false);
+            await _channel.BasicAckAsync(_deliveryTag, false, cancellationToken);
         }
-
-        return Task.CompletedTask;
+        finally
+        {
+            _syncRoot.Release();
+        }
     }
 
-    public Task RetryAsync(TimeSpan delay, CancellationToken cancellationToken = default)
+    public async Task RetryAsync(TimeSpan delay, CancellationToken cancellationToken = default)
     {
-        lock (_syncRoot)
+        await _syncRoot.WaitAsync(cancellationToken);
+        try
         {
-            var retryProperties = _channel.CreateBasicProperties();
+            var retryProperties = new BasicProperties();
             retryProperties.Persistent = true;
             CopyIfNotNull(_properties.ContentType, value => retryProperties.ContentType = value);
             CopyIfNotNull(_properties.ContentEncoding, value => retryProperties.ContentEncoding = value);
@@ -86,28 +90,33 @@ public sealed class RabbitMqReceivedMessage : IRabbitMqReceivedMessage
             retryProperties.Expiration = Math.Max(1, Convert.ToInt32(delay.TotalMilliseconds, CultureInfo.InvariantCulture))
                 .ToString(CultureInfo.InvariantCulture);
 
-            _channel.BasicPublish(string.Empty, _retryQueue, false, retryProperties, _body);
-            _channel.BasicAck(_deliveryTag, false);
+            await _channel.BasicPublishAsync(string.Empty, _retryQueue, false, retryProperties, _body, cancellationToken);
+            await _channel.BasicAckAsync(_deliveryTag, false, cancellationToken);
         }
-
-        return Task.CompletedTask;
-    }
-
-    public Task DeadLetterAsync(CancellationToken cancellationToken = default)
-    {
-        lock (_syncRoot)
+        finally
         {
-            _channel.BasicReject(_deliveryTag, false);
+            _syncRoot.Release();
         }
-
-        return Task.CompletedTask;
     }
 
-    private static IDictionary<string, object> CopyHeaders(IBasicProperties properties)
+    public async Task DeadLetterAsync(CancellationToken cancellationToken = default)
+    {
+        await _syncRoot.WaitAsync(cancellationToken);
+        try
+        {
+            await _channel.BasicRejectAsync(_deliveryTag, false, cancellationToken);
+        }
+        finally
+        {
+            _syncRoot.Release();
+        }
+    }
+
+    private static IDictionary<string, object?> CopyHeaders(IReadOnlyBasicProperties properties)
     {
         return properties.Headers is null
-            ? new Dictionary<string, object>()
-            : new Dictionary<string, object>(properties.Headers);
+            ? new Dictionary<string, object?>()
+            : new Dictionary<string, object?>(properties.Headers);
     }
 
     private static void CopyIfNotNull(string? value, Action<string> assign)

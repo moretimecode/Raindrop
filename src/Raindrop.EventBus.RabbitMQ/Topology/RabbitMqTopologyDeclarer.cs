@@ -8,7 +8,8 @@ public sealed class RabbitMqTopologyDeclarer : IRabbitMqTopologyDeclarer
     public const string DeadLetterQueue = "raindrop.dlq";
     public const string DeadLetterRoutingKey = "raindrop.dlx";
 
-    public void Declare(IRabbitMqChannel channel, string exchange, string routingKey, string? queue = null)
+    public async Task DeclareAsync(IRabbitMqChannel channel, string exchange, string routingKey, string? queue = null,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(channel);
         if (string.IsNullOrWhiteSpace(exchange))
@@ -19,24 +20,24 @@ public sealed class RabbitMqTopologyDeclarer : IRabbitMqTopologyDeclarer
         var mainQueue = queue ?? $"raindrop:{exchange}:{routingKey}";
         var retryQueue = $"{mainQueue}:retry";
 
-        channel.ExchangeDeclare(exchange, ExchangeType.Direct, durable: true, autoDelete: false);
-        channel.ExchangeDeclare(DeadLetterExchange, ExchangeType.Direct, durable: true, autoDelete: false);
+        await channel.ExchangeDeclareAsync(exchange, ExchangeType.Direct, durable: true, autoDelete: false, cancellationToken);
+        await channel.ExchangeDeclareAsync(DeadLetterExchange, ExchangeType.Direct, durable: true, autoDelete: false, cancellationToken);
 
-        channel.QueueDeclare(DeadLetterQueue, durable: true, exclusive: false, autoDelete: false, arguments: null);
+        await channel.QueueDeclareAsync(DeadLetterQueue, durable: true, exclusive: false, autoDelete: false, arguments: null, cancellationToken);
 
-        channel.QueueDeclare(mainQueue, durable: true, exclusive: false, autoDelete: false, new Dictionary<string, object>
+        await channel.QueueDeclareAsync(mainQueue, durable: true, exclusive: false, autoDelete: false, new Dictionary<string, object?>
         {
             ["x-dead-letter-exchange"] = DeadLetterExchange,
             ["x-dead-letter-routing-key"] = DeadLetterRoutingKey
-        });
+        }, cancellationToken);
 
-        channel.QueueDeclare(retryQueue, durable: true, exclusive: false, autoDelete: false, new Dictionary<string, object>
+        await channel.QueueDeclareAsync(retryQueue, durable: true, exclusive: false, autoDelete: false, new Dictionary<string, object?>
         {
             ["x-dead-letter-exchange"] = exchange,
             ["x-dead-letter-routing-key"] = routingKey
-        });
+        }, cancellationToken);
 
-        channel.QueueBind(mainQueue, exchange, routingKey);
-        channel.QueueBind(DeadLetterQueue, DeadLetterExchange, DeadLetterRoutingKey);
+        await channel.QueueBindAsync(mainQueue, exchange, routingKey, cancellationToken);
+        await channel.QueueBindAsync(DeadLetterQueue, DeadLetterExchange, DeadLetterRoutingKey, cancellationToken);
     }
 }

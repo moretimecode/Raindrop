@@ -14,6 +14,7 @@ public sealed class PostgreSqlTestFixture : IAsyncLifetime
     public const string SchemaName = "raindrop_data_tests";
 
     public string ConnectionString { get; } =
+        Environment.GetEnvironmentVariable("RAINDROP_TEST_POSTGRESQL_CONNECTION_STRING") ??
         "Host=localhost;Port=5432;Username=postgres;Password=123456;Database=postgres";
 
     public async Task InitializeAsync()

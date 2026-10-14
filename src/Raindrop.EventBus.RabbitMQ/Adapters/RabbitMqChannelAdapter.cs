@@ -3,55 +3,69 @@ using RabbitMQ.Client;
 namespace Raindrop.EventBus.RabbitMQ;
 
 /// <summary>
-/// IModel → IRabbitMqChannel 适配器。
+/// IChannel → IRabbitMqChannel 异步适配器。
 /// </summary>
 public sealed class RabbitMqChannelAdapter : IRabbitMqChannel
 {
-    private readonly IModel _channel;
+    private readonly IChannel _channel;
 
-    public RabbitMqChannelAdapter(IModel channel)
+    public RabbitMqChannelAdapter(IChannel channel)
     {
         _channel = channel ?? throw new ArgumentNullException(nameof(channel));
     }
 
     /// <summary>
-    /// 内部 IModel，供 HostedService Consumer 回调使用。
+    /// 内部通道，供 HostedService 消费回调使用。
     /// </summary>
-    public IModel InnerChannel => _channel;
+    public IChannel InnerChannel => _channel;
 
-    public void ExchangeDeclare(string exchange, string type, bool durable, bool autoDelete)
+    public Task ExchangeDeclareAsync(string exchange, string type, bool durable, bool autoDelete,
+        CancellationToken cancellationToken = default)
     {
-        _channel.ExchangeDeclare(exchange, type, durable, autoDelete);
+        return _channel.ExchangeDeclareAsync(exchange, type, durable, autoDelete,
+            cancellationToken: cancellationToken);
     }
 
-    public QueueDeclareOk QueueDeclare(string queue, bool durable, bool exclusive, bool autoDelete,
-        IDictionary<string, object>? arguments)
+    public Task<QueueDeclareOk> QueueDeclareAsync(string queue, bool durable, bool exclusive, bool autoDelete,
+        IDictionary<string, object?>? arguments, CancellationToken cancellationToken = default)
     {
-        return _channel.QueueDeclare(queue, durable, exclusive, autoDelete, arguments);
+        return _channel.QueueDeclareAsync(queue, durable, exclusive, autoDelete, arguments,
+            cancellationToken: cancellationToken);
     }
 
-    public void QueueBind(string queue, string exchange, string routingKey)
+    public Task QueueBindAsync(string queue, string exchange, string routingKey,
+        CancellationToken cancellationToken = default)
     {
-        _channel.QueueBind(queue, exchange, routingKey);
+        return _channel.QueueBindAsync(queue, exchange, routingKey, cancellationToken: cancellationToken);
     }
 
-    public void BasicQos(uint prefetchSize, ushort prefetchCount, bool global)
+    public Task BasicQosAsync(uint prefetchSize, ushort prefetchCount, bool global,
+        CancellationToken cancellationToken = default)
     {
-        _channel.BasicQos(prefetchSize, prefetchCount, global);
+        return _channel.BasicQosAsync(prefetchSize, prefetchCount, global, cancellationToken);
     }
 
-    public string BasicConsume(string queue, bool autoAck, IBasicConsumer consumer)
+    public Task<string> BasicConsumeAsync(string queue, bool autoAck, IAsyncBasicConsumer consumer,
+        CancellationToken cancellationToken = default)
     {
-        return _channel.BasicConsume(queue, autoAck, consumer);
+        return _channel.BasicConsumeAsync(queue, autoAck, consumer, cancellationToken);
     }
 
-    public void BasicCancel(string consumerTag)
+    public Task BasicCancelAsync(string consumerTag, CancellationToken cancellationToken = default)
     {
-        _channel.BasicCancel(consumerTag);
+        return _channel.BasicCancelAsync(consumerTag, cancellationToken: cancellationToken);
+    }
+
+    public ValueTask BasicPublishAsync(string exchange, string routingKey, bool mandatory,
+        BasicProperties properties, ReadOnlyMemory<byte> body, CancellationToken cancellationToken = default)
+    {
+        return _channel.BasicPublishAsync(exchange, routingKey, mandatory, properties, body, cancellationToken);
     }
 
     public void Dispose()
     {
         _channel.Dispose();
     }
+
+    public ValueTask DisposeAsync() => _channel.DisposeAsync();
 }

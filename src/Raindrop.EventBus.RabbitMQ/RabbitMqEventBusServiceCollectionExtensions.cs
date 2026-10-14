@@ -36,24 +36,25 @@ public static class RabbitMqEventBusServiceCollectionExtensions
         services.AddRaindropEventHandlers(assemblies);
         services.AddEventBusCore<RabbitMqEventRouteResolver>();
         services.TryAddSingleton(options);
-        services.TryAddSingleton<IConnection>(serviceProvider =>
+        services.TryAddSingleton<IRabbitMqConnection>(serviceProvider =>
         {
+            var connection = serviceProvider.GetService<IConnection>();
+            if (connection is not null)
+                return new RabbitMqConnectionAdapter(connection);
+
             var rabbitMqOptions = serviceProvider.GetRequiredService<RabbitMqEventBusOptions>();
             var factory = new ConnectionFactory
             {
-                Uri = new Uri(rabbitMqOptions.ConnectionString),
-                DispatchConsumersAsync = true
+                Uri = new Uri(rabbitMqOptions.ConnectionString)
             };
 
-            return factory.CreateConnection();
+            return new RabbitMqConnectionAdapter(factory);
         });
 
         services.TryAddEnumerable(ServiceDescriptor.Scoped<IEventTransport, RabbitMqEventTransport>());
         services.AddRabbitMqDeadLetterRetry();
 
         // HostedService 适配器
-        services.TryAddSingleton<IRabbitMqConnection>(sp =>
-            new RabbitMqConnectionAdapter(sp.GetRequiredService<IConnection>()));
         services.TryAddSingleton<IRabbitMqTopologyDeclarer, RabbitMqTopologyDeclarer>();
         services.TryAddSingleton(sp => new RabbitMqHostedService(
             assemblies,

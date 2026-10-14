@@ -3,20 +3,27 @@ using RabbitMQ.Client;
 namespace Raindrop.EventBus.RabbitMQ;
 
 /// <summary>
-/// 对 RabbitMQ IModel 的薄封装，方便单元测试 mock。
+/// 对 RabbitMQ 异步通道的薄封装，方便单元测试替换。
 /// </summary>
-public interface IRabbitMqChannel : IDisposable
+public interface IRabbitMqChannel : IDisposable, IAsyncDisposable
 {
-    void ExchangeDeclare(string exchange, string type, bool durable, bool autoDelete);
+    Task ExchangeDeclareAsync(string exchange, string type, bool durable, bool autoDelete,
+        CancellationToken cancellationToken = default);
 
-    QueueDeclareOk QueueDeclare(string queue, bool durable, bool exclusive, bool autoDelete,
-        IDictionary<string, object>? arguments);
+    Task<QueueDeclareOk> QueueDeclareAsync(string queue, bool durable, bool exclusive, bool autoDelete,
+        IDictionary<string, object?>? arguments, CancellationToken cancellationToken = default);
 
-    void QueueBind(string queue, string exchange, string routingKey);
+    Task QueueBindAsync(string queue, string exchange, string routingKey,
+        CancellationToken cancellationToken = default);
 
-    void BasicQos(uint prefetchSize, ushort prefetchCount, bool global);
+    Task BasicQosAsync(uint prefetchSize, ushort prefetchCount, bool global,
+        CancellationToken cancellationToken = default);
 
-    string BasicConsume(string queue, bool autoAck, IBasicConsumer consumer);
+    Task<string> BasicConsumeAsync(string queue, bool autoAck, IAsyncBasicConsumer consumer,
+        CancellationToken cancellationToken = default);
 
-    void BasicCancel(string consumerTag);
+    Task BasicCancelAsync(string consumerTag, CancellationToken cancellationToken = default);
+
+    ValueTask BasicPublishAsync(string exchange, string routingKey, bool mandatory,
+        BasicProperties properties, ReadOnlyMemory<byte> body, CancellationToken cancellationToken = default);
 }

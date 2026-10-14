@@ -35,21 +35,22 @@ public class RabbitMqHostedServiceIntegrationTests : IAsyncLifetime
         var scenario = NewScenarioName();
         await DeleteScenarioRecordsAsync(scenario);
 
-        using var connection = CreateConnection();
-        CleanupTopology(connection);
+        await using var connection = await CreateConnectionAsync();
+        await CleanupTopologyAsync(connection);
 
         using var host = BuildHost(connection);
 
         await host.StartAsync();
         await Task.Delay(1000);
 
-        using var channel = connection.CreateModel();
-        Publish(channel, new HostedServiceTestEvent(scenario, "hello"));
+        await using var channel = await connection.CreateChannelAsync();
+        await PublishAsync(channel, new HostedServiceTestEvent(scenario, "hello"));
 
         await WaitUntilAsync(async () =>
             await CountRecordsAsync(scenario, "hosted-service") == 1);
 
-        CleanupTopology(connection);
+        await host.StopAsync();
+        await CleanupTopologyAsync(connection);
     }
 
     [Fact]
@@ -58,32 +59,33 @@ public class RabbitMqHostedServiceIntegrationTests : IAsyncLifetime
         var scenario = NewScenarioName();
         await DeleteScenarioRecordsAsync(scenario);
 
-        using var connection = CreateConnection();
-        CleanupTopology(connection);
+        await using var connection = await CreateConnectionAsync();
+        await CleanupTopologyAsync(connection);
 
         using var host = BuildHost(connection);
 
         await host.StartAsync();
         await Task.Delay(1000);
 
-        using var channel = connection.CreateModel();
-        Publish(channel, new HostedServiceFailingEvent(scenario, "fail"));
+        await using var channel = await connection.CreateChannelAsync();
+        await PublishAsync(channel, new HostedServiceFailingEvent(scenario, "fail"));
 
         await WaitUntilAsync(async () =>
             await CountRecordsAsync(scenario, "failing-attempt") >= 2);
 
-        CleanupTopology(connection);
+        await host.StopAsync();
+        await CleanupTopologyAsync(connection);
     }
 
-    private static void CleanupTopology(IConnection connection)
+    private static async Task CleanupTopologyAsync(IConnection connection)
     {
         try
         {
-            using var channel = connection.CreateModel();
+            await using var channel = await connection.CreateChannelAsync();
             var queue = $"raindrop:{HostedExchange}:{HostedRoutingKey}";
-            channel.QueueDelete(queue, ifUnused: false, ifEmpty: false);
-            channel.QueueDelete($"{queue}:retry", ifUnused: false, ifEmpty: false);
-            channel.ExchangeDelete(HostedExchange, ifUnused: false);
+            await channel.QueueDeleteAsync(queue, ifUnused: false, ifEmpty: false);
+            await channel.QueueDeleteAsync($"{queue}:retry", ifUnused: false, ifEmpty: false);
+            await channel.ExchangeDeleteAsync(HostedExchange, ifUnused: false);
         }
         catch
         {
@@ -107,31 +109,30 @@ public class RabbitMqHostedServiceIntegrationTests : IAsyncLifetime
                 });
                 services.AddRabbitMqEventBus(options =>
                 {
-                    options.ConnectionString = "amqp://admin:admin123@localhost:5672";
+                    options.ConnectionString = RabbitMqTestSettings.ConnectionString;
                 }, typeof(RabbitMqHostedServiceIntegrationTests).Assembly);
             })
             .Build();
     }
 
-    private static IConnection CreateConnection()
+    private static Task<IConnection> CreateConnectionAsync()
     {
         return new ConnectionFactory
         {
-            Uri = new Uri("amqp://admin:admin123@localhost:5672"),
-            DispatchConsumersAsync = true
-        }.CreateConnection();
+            Uri = new Uri(RabbitMqTestSettings.ConnectionString)
+        }.CreateConnectionAsync();
     }
 
-    private static void Publish<TEvent>(IModel channel, TEvent eventData) where TEvent : IEvent
+    private static async Task PublishAsync<TEvent>(IChannel channel, TEvent eventData) where TEvent : IEvent
     {
         var body = JsonSerializer.SerializeToUtf8Bytes(eventData);
-        var properties = channel.CreateBasicProperties();
+        var properties = new BasicProperties();
         properties.Persistent = true;
         properties.ContentType = "application/json";
         properties.Type = typeof(TEvent).AssemblyQualifiedName;
-        properties.Headers = new Dictionary<string, object>();
+        properties.Headers = new Dictionary<string, object?>();
 
-        channel.BasicPublish(
+        await channel.BasicPublishAsync(
             HostedExchange,
             HostedRoutingKey,
             mandatory: false,

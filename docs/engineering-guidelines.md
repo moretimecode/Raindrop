@@ -5,6 +5,8 @@
 >
 > 当前技术栈：.NET 10 / ASP.NET Core / Raindrop.CQRS(MediatR) / Raindrop.Data(EF Core) / RabbitMQ / Redis(待沉淀包) / Raindrop.AppConfiguration / OpenTelemetry。
 
+基础依赖版本集中维护在根目录 `Directory.Build.props`：EF Core 与 Microsoft 扩展库为 10.0.13，Npgsql 与 PostgreSQL Provider 为 10.0.3，Mapster 为 10.0.13 稳定版，RabbitMQ.Client 为 7.2.2，FluentValidation 为 12.2.0。OpenTelemetry SDK／Exporter／Hosting 为 1.19.1，ASP.NET Core instrumentation 为 1.19.0。测试使用 Microsoft.NET.Test.Sdk 18.11.0、coverlet.collector 10.1.0、xUnit 2.9.3 和 Visual Studio runner 3.1.5。Apollo Configuration 为 2.11.0；内嵌 MediatR 源码基线为 12.5.0。
+
 ## §0 黄金三条
 
 1. **依赖向内**：领域模型必须纯净。领域对象只依赖稳定抽象，例如 `Raindrop.Data`、`Raindrop.UnitOfWork.Abstractions` 和项目自己的领域接口；EF Core、RabbitMQ、Redis、HTTP、OpenTelemetry SDK 等具体实现不进入领域层。
@@ -337,6 +339,10 @@ Tracing：
 - 业务规则必须有单测。
 - AI 生成的业务逻辑必须附带覆盖规则的测试。
 - 外部依赖优先用 fake/stub；必要的 PostgreSQL、RabbitMQ、Redis 集成测试要清楚隔离，并可在本地配置下重复运行。
+
+集成测试通过 `RAINDROP_TEST_POSTGRESQL_CONNECTION_STRING` 和 `RAINDROP_TEST_RABBITMQ_CONNECTION_STRING` 指定测试服务，未指定时使用仓库约定的本地连接。RabbitMQ 环境变量同时用于直接消费测试和 HostedService 测试；生产注册的默认连接不受影响。测试前需要确保 PostgreSQL 与 RabbitMQ 可达且账号有测试拓扑的声明、发布和消费权限。隔离测试服务使用独立容器、仅绑定本机端口和临时强密码，避免变更已有服务的账号。
+
+测试用例：配置了 RabbitMQ 连接时使用指定连接；未配置或配置为空时使用本地默认连接。所有数据库测试项目使用指定的 PostgreSQL 连接。现有发布消费、失败重试、死信、仓储、工作单元和配置源集成测试验证端到端行为。
 
 常用验证：
 

@@ -30,15 +30,16 @@ public class RabbitMqBrokerIntegrationTests : IClassFixture<RabbitMqTestFixture>
     {
         var scenario = NewScenarioName();
         await DeleteScenarioRecordsAsync(scenario);
-        using var topology = _rabbitMq.CreateTopology(
+        await using var topology = await _rabbitMq.CreateTopologyAsync(
             RabbitMqTestRoutes.MainExchange,
             RabbitMqTestRoutes.MainRoutingKey);
         using var provider = CreateServices()
             .AddSingleton(_rabbitMq.Connection)
             .AddMediatRLocalEventBus(typeof(RabbitMqBrokerIntegrationTests).Assembly)
-            .AddRabbitMqEventBus(typeof(RabbitMqBrokerIntegrationTests).Assembly)
+            .AddRabbitMqEventBus(options => options.ConnectionString = RabbitMqTestSettings.ConnectionString,
+                typeof(RabbitMqBrokerIntegrationTests).Assembly)
             .BuildServiceProvider();
-        using var consumer = StartConsumer<RabbitRecordEvent, RabbitRecordHandler>(provider, topology);
+        await using var consumer = await StartConsumerAsync<RabbitRecordEvent, RabbitRecordHandler>(provider, topology);
 
         var eventBus = provider.GetRequiredService<IEventBus>();
 
@@ -55,7 +56,7 @@ public class RabbitMqBrokerIntegrationTests : IClassFixture<RabbitMqTestFixture>
     {
         var scenario = NewScenarioName();
         await DeleteScenarioRecordsAsync(scenario);
-        using var topology = _rabbitMq.CreateTopology();
+        await using var topology = await _rabbitMq.CreateTopologyAsync();
         await topology.VerifyRetryRouteAsync();
         using var provider = CreateServices(options =>
             {
@@ -63,12 +64,13 @@ public class RabbitMqBrokerIntegrationTests : IClassFixture<RabbitMqTestFixture>
                 options.InitialDelay = TimeSpan.FromMilliseconds(100);
                 options.MaxDelay = TimeSpan.FromMilliseconds(100);
             })
-            .AddRabbitMqEventBus(typeof(RabbitMqBrokerIntegrationTests).Assembly)
+            .AddRabbitMqEventBus(options => options.ConnectionString = RabbitMqTestSettings.ConnectionString,
+                typeof(RabbitMqBrokerIntegrationTests).Assembly)
             .BuildServiceProvider();
         var consumerErrors = new ConcurrentQueue<string>();
-        using var consumer = StartConsumer<RetryRecordEvent, RetryThenSuccessHandler>(provider, topology, consumerErrors);
+        await using var consumer = await StartConsumerAsync<RetryRecordEvent, RetryThenSuccessHandler>(provider, topology, consumerErrors);
 
-        topology.Publish(new RetryRecordEvent(scenario, "retry"));
+        await topology.PublishAsync(new RetryRecordEvent(scenario, "retry"));
 
         var retryAttemptCount = 0;
         var retrySuccessCount = 0;
@@ -78,9 +80,9 @@ public class RabbitMqBrokerIntegrationTests : IClassFixture<RabbitMqTestFixture>
                 retrySuccessCount = await CountRecordsAsync(scenario, "retry-success");
                 return retryAttemptCount >= 2 && retrySuccessCount >= 1;
             },
-            () => $"attempt={retryAttemptCount}, success={retrySuccessCount}, main={topology.GetMessageCount(topology.MainQueue)}, retry={topology.GetMessageCount(topology.RetryQueue)}, dlq={topology.GetMessageCount(topology.DeadLetterQueue)}, errors={string.Join(" | ", consumerErrors)}");
+            () => $"attempt={retryAttemptCount}, success={retrySuccessCount}, errors={string.Join(" | ", consumerErrors)}");
 
-        Assert.Equal(0u, topology.GetMessageCount(topology.DeadLetterQueue));
+        Assert.Equal(0u, await topology.GetMessageCountAsync(topology.DeadLetterQueue));
     }
 
     [Fact]
@@ -88,20 +90,21 @@ public class RabbitMqBrokerIntegrationTests : IClassFixture<RabbitMqTestFixture>
     {
         var scenario = NewScenarioName();
         await DeleteScenarioRecordsAsync(scenario);
-        using var topology = _rabbitMq.CreateTopology();
+        await using var topology = await _rabbitMq.CreateTopologyAsync();
         using var provider = CreateServices(options =>
             {
                 options.MaxRetryCount = 1;
                 options.InitialDelay = TimeSpan.FromMilliseconds(50);
                 options.MaxDelay = TimeSpan.FromMilliseconds(50);
             })
-            .AddRabbitMqEventBus(typeof(RabbitMqBrokerIntegrationTests).Assembly)
+            .AddRabbitMqEventBus(options => options.ConnectionString = RabbitMqTestSettings.ConnectionString,
+                typeof(RabbitMqBrokerIntegrationTests).Assembly)
             .BuildServiceProvider();
-        using var consumer = StartConsumer<DeadLetterRecordEvent, AlwaysFailingHandler>(provider, topology);
+        await using var consumer = await StartConsumerAsync<DeadLetterRecordEvent, AlwaysFailingHandler>(provider, topology);
 
-        topology.Publish(new DeadLetterRecordEvent(scenario, "dead-letter"));
+        await topology.PublishAsync(new DeadLetterRecordEvent(scenario, "dead-letter"));
 
-        await WaitUntilAsync(() => Task.FromResult(topology.GetMessageCount(topology.DeadLetterQueue) == 1));
+        await WaitUntilAsync(async () => await topology.GetMessageCountAsync(topology.DeadLetterQueue) == 1);
 
         Assert.Equal(1, await CountRecordsAsync(scenario, "dead-letter-attempt"));
     }
@@ -114,67 +117,67 @@ public class RabbitMqBrokerIntegrationTests : IClassFixture<RabbitMqTestFixture>
     }
 
 
-    private RabbitMqConsumerRegistration StartConsumer<TEvent, THandler>(
-    ServiceProvider provider,
-    RabbitMqTopology topology,
-    ConcurrentQueue<string>? consumerErrors = null)
-    where TEvent : IEvent
-    where THandler : IEventHandler<TEvent>
+    private async Task<RabbitMqConsumerRegistration> StartConsumerAsync<TEvent, THandler>(
+        ServiceProvider provider,
+        RabbitMqTopology topology,
+        ConcurrentQueue<string>? consumerErrors = null)
+        where TEvent : IEvent
+        where THandler : IEventHandler<TEvent>
     {
-    var channel = _rabbitMq.Connection.CreateModel();
-    channel.BasicQos(0, 1, false);
+        var channel = await _rabbitMq.Connection.CreateChannelAsync();
+        await channel.BasicQosAsync(0, 1, false);
 
-    var consumer = new AsyncEventingBasicConsumer(channel);
-    consumer.Received += async (_, args) =>
-    {
-        try
+        var consumer = new AsyncEventingBasicConsumer(channel);
+        consumer.ReceivedAsync += async (_, args) =>
         {
-            if (args.BasicProperties is null)
+            try
             {
-                channel.BasicReject(args.DeliveryTag, false);
-                return;
-            }
+                if (args.BasicProperties is null)
+                {
+                    await channel.BasicRejectAsync(args.DeliveryTag, false);
+                    return;
+                }
 
-            using var linkedCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-            var eventData = JsonSerializer.Deserialize<TEvent>(Encoding.UTF8.GetString(args.Body))
-                ?? throw new InvalidOperationException("RabbitMQ 消息反序列化失败。");
-            var failedCount = RabbitMqReceivedMessage.ReadFailedCount(args.BasicProperties);
-            var message = new RabbitMqReceivedMessage(
-                channel,
-                args.DeliveryTag,
-                args.Body,
-                args.BasicProperties,
-                failedCount,
-                topology.RetryQueue);
+                using var linkedCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+                var eventData = JsonSerializer.Deserialize<TEvent>(Encoding.UTF8.GetString(args.Body.Span))
+                    ?? throw new InvalidOperationException("RabbitMQ 消息反序列化失败。");
+                var failedCount = RabbitMqReceivedMessage.ReadFailedCount(args.BasicProperties);
+                var message = new RabbitMqReceivedMessage(
+                    channel,
+                    args.DeliveryTag,
+                    args.Body.ToArray(),
+                    args.BasicProperties,
+                    failedCount,
+                    topology.RetryQueue);
 
-            var scopeFactory = provider.GetRequiredService<IServiceScopeFactory>();
-            var executor = new RabbitMqConsumerExecutor(scopeFactory);
-            var result = await executor.ExecuteAsync<TEvent, THandler>(eventData, linkedCts.Token);
+                var scopeFactory = provider.GetRequiredService<IServiceScopeFactory>();
+                var executor = new RabbitMqConsumerExecutor(scopeFactory);
+                var result = await executor.ExecuteAsync<TEvent, THandler>(eventData, linkedCts.Token);
 
-            if (result.Status is RabbitMqHandlerExecutionStatus.Succeeded or RabbitMqHandlerExecutionStatus.AlreadyProcessed)
-                await message.AckAsync(linkedCts.Token);
-            else if (result.Status == RabbitMqHandlerExecutionStatus.Retry)
-            {
-                var policyResolver = provider.GetRequiredService<IRabbitMqDeadLetterRetryPolicyResolver>();
-                var policy = policyResolver.Resolve(typeof(THandler));
-                if (policy.ShouldDeadLetter(failedCount + 1))
-                    await message.DeadLetterAsync(linkedCts.Token);
+                if (result.Status is RabbitMqHandlerExecutionStatus.Succeeded or RabbitMqHandlerExecutionStatus.AlreadyProcessed)
+                    await message.AckAsync(linkedCts.Token);
+                else if (result.Status == RabbitMqHandlerExecutionStatus.Retry)
+                {
+                    var policyResolver = provider.GetRequiredService<IRabbitMqDeadLetterRetryPolicyResolver>();
+                    var policy = policyResolver.Resolve(typeof(THandler));
+                    if (policy.ShouldDeadLetter(failedCount + 1))
+                        await message.DeadLetterAsync(linkedCts.Token);
+                    else
+                        await message.RetryAsync(policy.GetRetryDelay(failedCount + 1), linkedCts.Token);
+                }
                 else
-                    await message.RetryAsync(policy.GetRetryDelay(failedCount + 1), linkedCts.Token);
+                    await message.DeadLetterAsync(linkedCts.Token);
             }
-            else
-                await message.DeadLetterAsync(linkedCts.Token);
-        }
-        catch (Exception ex)
-        {
-            consumerErrors?.Enqueue(ex.ToString());
-        }
-    };
+            catch (Exception ex)
+            {
+                consumerErrors?.Enqueue(ex.ToString());
+            }
+        };
 
-    var consumerTag = channel.BasicConsume(topology.MainQueue, false, consumer);
+        var consumerTag = await channel.BasicConsumeAsync(topology.MainQueue, false, consumer);
 
-            return new RabbitMqConsumerRegistration(channel, consumerTag);
-        }
+        return new RabbitMqConsumerRegistration(channel, consumerTag);
+    }
 
     private async Task<int> CountRecordsAsync(string scenario, string source)
     {
@@ -287,42 +290,56 @@ public class RabbitMqBrokerIntegrationTests : IClassFixture<RabbitMqTestFixture>
         }
     }
 
-    private sealed class RabbitMqConsumerRegistration(IModel channel, string consumerTag) : IDisposable
+    private sealed class RabbitMqConsumerRegistration(IChannel channel, string consumerTag) : IAsyncDisposable
     {
-        public void Dispose()
+        public async ValueTask DisposeAsync()
         {
-            if (channel.IsOpen) channel.BasicCancel(consumerTag);
-            channel.Dispose();
+            try
+            {
+                if (channel.IsOpen) await channel.BasicCancelAsync(consumerTag);
+            }
+            finally
+            {
+                await channel.DisposeAsync();
+            }
         }
     }
 }
 
-public sealed class RabbitMqTestFixture : IDisposable
+public sealed class RabbitMqTestFixture : IAsyncLifetime
 {
-    private const string ConnectionString = "amqp://admin:admin123@localhost:5672";
+    public IConnection Connection { get; private set; } = null!;
 
-    public RabbitMqTestFixture()
+    public async Task InitializeAsync()
     {
-        var factory = new ConnectionFactory
-        {
-            Uri = new Uri(ConnectionString),
-            DispatchConsumersAsync = true
-        };
-        Connection = factory.CreateConnection();
+        Connection = await new ConnectionFactory { Uri = new Uri(RabbitMqTestSettings.ConnectionString) }.CreateConnectionAsync();
     }
 
-    public IConnection Connection { get; }
+    public async Task<RabbitMqTopology> CreateTopologyAsync(string? mainExchange = null, string? mainRoutingKey = null)
+    {
+        var channel = await Connection.CreateChannelAsync();
+        var topology = new RabbitMqTopology(channel, mainExchange, mainRoutingKey);
+        try
+        {
+            await topology.DeclareAsync();
+            return topology;
+        }
+        catch
+        {
+            await channel.DisposeAsync();
+            throw;
+        }
+    }
 
-    public RabbitMqTopology CreateTopology() => new(Connection);
-    public RabbitMqTopology CreateTopology(string mainExchange, string mainRoutingKey)
-        => new(Connection, mainExchange, mainRoutingKey);
-
-    public void Dispose() => Connection.Dispose();
+    public async Task DisposeAsync()
+    {
+        if (Connection is not null) await Connection.DisposeAsync();
+    }
 }
 
-public sealed class RabbitMqTopology : IDisposable
+public sealed class RabbitMqTopology : IAsyncDisposable
 {
-    private readonly IModel _channel;
+    private readonly IChannel _channel;
     public string MainExchange { get; }
     public string DeadLetterExchange { get; }
     public string MainQueue { get; }
@@ -331,9 +348,9 @@ public sealed class RabbitMqTopology : IDisposable
     public string MainRoutingKey { get; }
     public string DeadLetterRoutingKey { get; }
 
-    public RabbitMqTopology(IConnection connection, string? mainExchange = null, string? mainRoutingKey = null)
+    public RabbitMqTopology(IChannel channel, string? mainExchange = null, string? mainRoutingKey = null)
     {
-        _channel = connection.CreateModel();
+        _channel = channel;
         var suffix = $"{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}.{Environment.CurrentManagedThreadId}";
         MainExchange = mainExchange ?? $"raindrop.tests.main.{suffix}";
         DeadLetterExchange = $"raindrop.tests.dlx.{suffix}";
@@ -342,57 +359,56 @@ public sealed class RabbitMqTopology : IDisposable
         DeadLetterQueue = $"raindrop.tests.dlq.{suffix}";
         MainRoutingKey = mainRoutingKey ?? $"raindrop.tests.main.{suffix}";
         DeadLetterRoutingKey = $"raindrop.tests.dead.{suffix}";
-        Declare();
     }
 
-    private void Declare()
+    public async Task DeclareAsync()
     {
-        _channel.ExchangeDeclare(MainExchange, ExchangeType.Direct, true, false);
-        _channel.ExchangeDeclare(DeadLetterExchange, ExchangeType.Direct, true, false);
-        _channel.QueueDeclare(MainQueue, true, false, false, new Dictionary<string, object>
+        await _channel.ExchangeDeclareAsync(MainExchange, ExchangeType.Direct, true, false);
+        await _channel.ExchangeDeclareAsync(DeadLetterExchange, ExchangeType.Direct, true, false);
+        await _channel.QueueDeclareAsync(MainQueue, true, false, false, new Dictionary<string, object?>
         {
             ["x-dead-letter-exchange"] = DeadLetterExchange,
             ["x-dead-letter-routing-key"] = DeadLetterRoutingKey
         });
-        _channel.QueueDeclare(RetryQueue, true, false, false, new Dictionary<string, object>
+        await _channel.QueueDeclareAsync(RetryQueue, true, false, false, new Dictionary<string, object?>
         {
             ["x-dead-letter-exchange"] = MainExchange,
             ["x-dead-letter-routing-key"] = MainRoutingKey
         });
-        _channel.QueueDeclare(DeadLetterQueue, true, false, false, null);
-        _channel.QueueBind(MainQueue, MainExchange, MainRoutingKey);
-        _channel.QueueBind(DeadLetterQueue, DeadLetterExchange, DeadLetterRoutingKey);
+        await _channel.QueueDeclareAsync(DeadLetterQueue, true, false, false, null);
+        await _channel.QueueBindAsync(MainQueue, MainExchange, MainRoutingKey);
+        await _channel.QueueBindAsync(DeadLetterQueue, DeadLetterExchange, DeadLetterRoutingKey);
     }
 
-    public void Publish<TEvent>(TEvent eventData) where TEvent : IEvent
+    public async Task PublishAsync<TEvent>(TEvent eventData) where TEvent : IEvent
     {
         var body = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(eventData));
-        var properties = _channel.CreateBasicProperties();
+        var properties = new BasicProperties();
         properties.Persistent = true;
         properties.ContentType = "application/json";
-        properties.Headers = new Dictionary<string, object>();
-            properties.Type = typeof(TEvent).AssemblyQualifiedName;
-        _channel.BasicPublish(MainExchange, MainRoutingKey, false, properties, body);
+        properties.Headers = new Dictionary<string, object?>();
+        properties.Type = typeof(TEvent).AssemblyQualifiedName;
+        await _channel.BasicPublishAsync(MainExchange, MainRoutingKey, false, properties, body);
     }
 
-    public uint GetMessageCount(string queue) => _channel.MessageCount(queue);
+    public Task<uint> GetMessageCountAsync(string queue) => _channel.MessageCountAsync(queue);
 
     public async Task VerifyRetryRouteAsync()
     {
-        var properties = _channel.CreateBasicProperties();
+        var properties = new BasicProperties();
         properties.Expiration = "50";
         var body = Encoding.UTF8.GetBytes("probe");
 
-        _channel.BasicPublish(string.Empty, RetryQueue, false, properties, body);
+        await _channel.BasicPublishAsync(string.Empty, RetryQueue, false, properties, body);
 
         var timeoutAt = DateTimeOffset.UtcNow.AddSeconds(5);
         BasicGetResult? result = null;
         while (DateTimeOffset.UtcNow < timeoutAt)
         {
-            result = _channel.BasicGet(MainQueue, autoAck: false);
+            result = await _channel.BasicGetAsync(MainQueue, autoAck: false);
             if (result is not null)
             {
-                _channel.BasicAck(result.DeliveryTag, false);
+                await _channel.BasicAckAsync(result.DeliveryTag, false);
                 return;
             }
 
@@ -402,17 +418,23 @@ public sealed class RabbitMqTopology : IDisposable
         Assert.Fail("RabbitMQ 重试拓扑没有把消息从 Retry Queue 路由回 Main Queue。");
     }
 
-    public void Dispose()
+    public async ValueTask DisposeAsync()
     {
-        if (_channel.IsOpen)
+        try
         {
-            _channel.QueueDelete(DeadLetterQueue, false, false);
-            _channel.QueueDelete(RetryQueue, false, false);
-            _channel.QueueDelete(MainQueue, false, false);
-            _channel.ExchangeDelete(DeadLetterExchange, false);
-            _channel.ExchangeDelete(MainExchange, false);
+            if (_channel.IsOpen)
+            {
+                await _channel.QueueDeleteAsync(DeadLetterQueue, false, false);
+                await _channel.QueueDeleteAsync(RetryQueue, false, false);
+                await _channel.QueueDeleteAsync(MainQueue, false, false);
+                await _channel.ExchangeDeleteAsync(DeadLetterExchange, false);
+                await _channel.ExchangeDeleteAsync(MainExchange, false);
+            }
         }
-        _channel.Dispose();
+        finally
+        {
+            await _channel.DisposeAsync();
+        }
     }
 }
 

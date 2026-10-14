@@ -16,3 +16,12 @@ Raindrop 是一个小型 .NET 微服务框架骨架。
 dotnet build Raindrop.slnx
 dotnet test Raindrop.slnx
 ```
+
+本地 NuGet 仓库位于 `nuget-local/`，对应 NuGet 源名称为 `raindrop-local`。当前框架包版本为 `0.1.1`；使用 Makefile 时通过 `VERSION` 指定版本：
+
+```bash
+make build VERSION=0.1.1
+make list-local
+```
+
+集成测试需要 PostgreSQL 与 RabbitMQ。使用隔离测试服务时，通过 `RAINDROP_TEST_POSTGRESQL_CONNECTION_STRING` 和 `RAINDROP_TEST_RABBITMQ_CONNECTION_STRING` 指定连接，配置方式见[测试约定](docs/engineering-guidelines.md#11-测试约定)。

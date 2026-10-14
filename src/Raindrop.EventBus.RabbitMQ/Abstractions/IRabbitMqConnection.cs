@@ -5,5 +5,5 @@ namespace Raindrop.EventBus.RabbitMQ;
 /// </summary>
 public interface IRabbitMqConnection
 {
-    IRabbitMqChannel CreateChannel();
+    Task<IRabbitMqChannel> CreateChannelAsync(CancellationToken cancellationToken = default);
 }
