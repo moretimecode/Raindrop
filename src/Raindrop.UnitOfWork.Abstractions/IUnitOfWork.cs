@@ -7,12 +7,15 @@ public interface IUnitOfWork : IAsyncDisposable
 {
     /// <summary>
     /// 提交所有变更。
-    /// 内部流程：收集领域事件 → 递归处理领域事件 → SaveChanges → 发布集成事件 → 执行 OnCompleted 回调。
+    /// EF 实现先准备领域事件；启用 Outbox 时在原事务登记集成事件，再 SaveChanges 和物理提交。
+    /// 默认未启用 Outbox 时，确认提交后尽力发布集成事件；启用时仅持久化意图，不即时发送。
+    /// 确认提交后执行 OnCompleted。
+    /// 物理提交结果不明时抛出 UnitOfWorkCommitUnknownException，失败实例不可重用。
     /// </summary>
     Task CommitAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// 回滚。丢弃所有未持久化的变更。
+    /// 回滚并清理跟踪变更与完成回调。不能将提交不明解释为确定未提交。
     /// </summary>
     Task RollbackAsync(CancellationToken cancellationToken = default);
 

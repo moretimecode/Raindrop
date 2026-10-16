@@ -1,4 +1,5 @@
-# 仓储与工作单元设计说明
+# 仓储与工作单元设计实现
+
 
 ## 概述
 
@@ -6,7 +7,7 @@
 
 - **仓储（Repository）**：聚合根状态的持久化，不封装查询逻辑（查询用 `Expression` 谓词，批量更新/删除用原生 SQL 命令）
 - **规约（Specification）**：可选的查询复用单元，用于需要 `Include` 导航属性的场景
-- **工作单元（Unit of Work）**：事务边界，**递归领域事件处理**在 `SaveChanges` 之前完成，集成事件在事务提交之后发布
+- **工作单元（Unit of Work）**：事务边界，**递归领域事件处理**在 `SaveChanges` 之前完成，集成事件默认在事务提交之后尽力发布；启用 Outbox 时在提交前同事务登记
 - **完成回调（OnCompleted）**：注册提交成功后执行的委托
 
 ## 依赖关系
@@ -23,7 +24,7 @@ Raindrop.UnitOfWork.Abstractions
 Raindrop.Data.EFCore
   ├─ EntityFrameworkCoreRepository         → 实现 IRepository
   ├─ EntityFrameworkCoreUnitOfWork          → 实现 IUnitOfWork（含递归领域事件）
-  ├─ DomainEventProcessor                  → 递归事件处理核心
+  ├─ DomainEventProcessor                  → 事件批次准备与迭代处理
   └─ DataServiceCollectionExtensions       → DI 注册
 ```
 
@@ -85,25 +86,31 @@ public class OrderService
 {
     private readonly IRepository<Order, Guid> _orderRepo;
     private readonly IRepository<Product, Guid> _productRepo;
+    private readonly IUnitOfWorkFactory _unitOfWorkFactory;
 
     public OrderService(
         IRepository<Order, Guid> orderRepo,
-        IRepository<Product, Guid> productRepo)
+        IRepository<Product, Guid> productRepo,
+        IUnitOfWorkFactory unitOfWorkFactory)
     {
         _orderRepo = orderRepo;
         _productRepo = productRepo;
+        _unitOfWorkFactory = unitOfWorkFactory;
     }
 
     public async Task CompleteOrderAsync(Guid orderId)
     {
+        await using var uow = await _unitOfWorkFactory.BeginAsync();
+
         // 获取聚合根
-        var order = await _orderRepo.GetAsync(orderId);
+        var order = await _orderRepo.GetAsync(orderId)
+            ?? throw new InvalidOperationException("订单不存在。");
 
         // 领域方法 — 产生 OrderSubmitted 事件
         order.Complete();
 
         // 提交工作单元 → 递归处理领域事件 → SaveChanges → 集成事件 → OnCompleted
-        await _orderRepo.UnitOfWork.CommitAsync();
+        await uow.CommitAsync();
     }
 }
 ```
@@ -119,11 +126,11 @@ public class OrderService
 
 ### 写操作语义边界
 
-`InsertAsync`、`UpdateAsync`、`DeleteAsync` 是普通仓储写操作，只把变更放入当前 `DbContext` 的 ChangeTracker，真正的保存、领域事件递归处理、集成事件发布和 `OnCompleted` 回调都由 `UnitOfWork.CommitAsync()` 统一完成。
+`InsertAsync`、`UpdateAsync`、`DeleteAsync` 是普通仓储写操作，只把变更放入当前 `DbContext` 的 ChangeTracker，真正的保存、领域事件递归处理、集成事件登记或发布和 `OnCompleted` 回调都由 `UnitOfWork.CommitAsync()` 统一完成。
 
 `InsertAndGetIdAsync` 是一个明确的设计特例，主要用于需要提前拿到数据库自增 ID 的场景。它会在实体主键仍是临时值时立即调用 `SaveChangesAsync()`，让数据库生成主键并回填实体。这个方法只表达“取号/拿 ID”，不代表完整业务提交，也不会触发 `CommitAsync()` 中的领域事件递归处理、集成事件分离发布和 `OnCompleted` 流程。调用方如果在实体上提前挂了领域事件，需要知道这些事件不会因为这次取 ID 自动处理。
 
-`ExecuteCmd` 当前是**实验性过渡 API**。它直接执行原生 SQL 命令，不等待 `UnitOfWork.CommitAsync()` 才发送到数据库；因此在当前实现中，后续调用 `RollbackAsync()` 不会撤销已经执行成功的 SQL 命令。后续如果仓储 API 收敛，这个方法可能会被移除或改成更明确的批量命令抽象。
+`ExecuteCmd` 当前是**实验性过渡 API**。它直接执行原生 SQL 命令，不等待 `UnitOfWork.CommitAsync()` 才发送到数据库；调用发生在同一 `DbContext` 已开启的显式事务内时，命令参加当前事务，后续回滚该事务会撤销其变更；如果在事务外执行，则后来开启的 UoW 无法回滚此前已提交的命令。后续如果仓储 API 收敛，这个方法可能会被移除或改成更明确的批量命令抽象。
 
 ## 规约（Specification）
 
@@ -182,146 +189,33 @@ var orders = await repo.QueryAsync<Order>(o => o.CreatedAt > DateTime.UtcNow.Add
 await repo.ExecuteCmd("UPDATE orders SET status = 1 WHERE expired = true");
 ```
 
-## 工作单元与递归领域事件
+## 工作单元入口
 
-### 工作单元流程
-
-```text
-BeginAsync()
-  │
-  └─ 开启显式数据库事务（BeginTransactionAsync）
-       InMemory 等不支持事务的 provider 跳过事务管理
-
-CommitAsync()
-  │
-  ├─ 1. 从 ChangeTracker 收集领域事件
-  │       IIntegrationEvent 分离出来暂存
-  │
-  ├─ 2. 递归发布领域事件（通过 IEventBus）
-  │       handler 修改的聚合根继续产生新事件 → 回到步骤 2
-  │       领域事件 handler 异常直接向上抛出 → 事务回滚
-  │
-  ├─ 3. SaveChangesAsync() — 所有修改写入数据库
-  │
-  ├─ 4. Commit DB transaction — 提交 BeginAsync 已开启的事务
-  │
-  ├─ 5. 发布集成事件（通过 IEventBus）
-  │       事务已提交，集成事件失败会记录错误日志，但不会回滚数据库
-  │
-  └─ 6. 执行 OnCompleted handlers
-```
-
-### 关键设计
-
-> **CommitAsync 失败后，当前 UoW 和 DbContext 不可继续使用**
->
-> 领域事件在发布前已从实体上清除。如果 CommitAsync 因领域事件 handler 异常而失败，
-> 调用方必须调用 `RollbackAsync()` 或直接丢弃当前 scope。**不要修正问题后在同一 UoW 上重试 CommitAsync**，
-> 因为事件列表已清空，再次 CommitAsync 不会重新触发领域事件处理。
-
-| 特性 | 时机 | 说明 |
-|------|------|------|
-| 领域事件（`IEvent`）处理 | SaveChanges **之前** | 处理过程中实体修改在 ChangeTracker 累积，属于同一个事务 |
-| 集成事件（`IIntegrationEvent`）发布 | SaveChanges **之后** | 事务已提交，防止发了消息但数据库回滚 |
-| `OnCompleted` 回调 | 集成事件发布 **之后** | 数据库事务已提交后执行；回调失败只记录错误日志，不会回滚数据库，也不会让 `CommitAsync` 抛出异常 |
-| 递归终止条件 | `CollectDomainEvents()` 返回空 | 不做循环检测，依赖开发者幂等保护 |
-
-### 递归示例
+`IUnitOfWorkFactory.BeginAsync()` 在返回前开启工作单元。关系型 provider 同时开启数据库事务；InMemory 只提供生命周期，不提供关系型原子性。不能省略 Begin 后直接 Commit。
 
 ```csharp
-// Order 聚合根
-public class Order : AggregateRoot<Guid>
+public interface IUnitOfWork : IAsyncDisposable
 {
-    public void Complete()
-    {
-        Status = OrderStatus.Completed;
-        AddDomainEvent(new OrderSubmittedEvent(Id));
-    }
+    Task CommitAsync(CancellationToken cancellationToken = default);
+    Task RollbackAsync(CancellationToken cancellationToken = default);
+    void OnCompleted(Func<Task> handler);
+    void ClearCompletedHandler();
 }
 
-// Product 聚合根
-public class Product : AggregateRoot<Guid>
-{
-    public void ReduceStock(int quantity)
-    {
-        Stock -= quantity;
-        AddDomainEvent(new StockReducedEvent(Id, quantity));
-    }
-}
-
-// 事件处理
-public class OrderSubmittedHandler : IEventHandler<OrderSubmittedEvent>
-{
-    private readonly IRepository<Product, Guid> _productRepo;
-
-    public async Task HandleAsync(OrderSubmittedEvent eventData)
-    {
-        var product = await _productRepo.GetAsync(eventData.ProductId);
-        product.ReduceStock(1);            // ← 产生 StockReduced 事件
-        // 不需要提交——当前 UoW 的 CommitAsync 会递归处理
-    }
-}
-
-// 调用方
-var order = await _orderRepo.GetAsync(orderId);
-order.Complete();
-await _orderRepo.UnitOfWork.CommitAsync();
-// 递归: OrderSubmitted → StockReduced → 终止
-```
-
-### 循环风险与幂等
-
-```
-A 事件 → 处理 A → 产生 B 事件
-  → 处理 B → 产生 A 事件
-  → 处理 A → 产生 B 事件
-  → ... 无限递归直到栈溢出
-```
-
-当前框架不做循环检测。防止循环的手段：
-
-- **事件处理程序只改自己的聚合根**
-- **在 `StockReduced` 处理程序中检查库存是否已扣减**
-- **使用 `IdempotentConsumerAttribute`**（如果走事件总线）
-
-## 工作单元实例一致性
-
-同一个 DI scope 内的仓储和 `IUnitOfWorkFactory.BeginAsync()` 返回的工作单元共享同一个 EF Core `DbContext` 和 ChangeTracker。手动开启工作单元时，`BeginAsync()` 会在返回前初始化事务；仓储随后产生的变更都纳入这个工作单元。
-
-### 手动工作单元入口
-
-手动事务入口由 `IUnitOfWorkFactory` 表达：
-
-```csharp
 public interface IUnitOfWorkFactory
 {
     ValueTask<IUnitOfWork> BeginAsync(CancellationToken cancellationToken = default);
 }
 ```
 
-`BeginAsync()` 必须在返回前完成工作单元初始化。对于 EF Core、ADO.NET、Dapper 等关系型实现来说，这意味着它要在内部打开连接并开启数据库事务；`CommitAsync()` 只负责提交已经开启的工作单元，不再承担“到提交时才开启事务”的职责。
-
-即使底层 provider 不支持数据库事务，例如 EF Core InMemory，也必须先通过 `IUnitOfWorkFactory.BeginAsync()` 标记工作单元已经开启，再调用 `CommitAsync()`。这样开发、测试和关系型数据库环境保持同一套入口约束，避免 InMemory 测试通过但切换到 PostgreSQL 后才暴露漏掉 Begin 的问题。
-
-调用方式：
+同一个 DI scope 内，同一 DbContext 的仓储、工厂和 UoW 共享 ChangeTracker 与事务。重复 Begin 同一个活动 UoW 是加入原事务，不是独立的嵌套事务，也没有嵌套提交/回滚所有权。
 
 ```csharp
 await using var uow = await unitOfWorkFactory.BeginAsync(cancellationToken);
-
-await orderRepository.InsertAsync(order);
-await inventoryRepository.UpdateAsync(inventory);
-
-await uow.CommitAsync(cancellationToken);
-```
-
-如果中途失败，调用方可以显式回滚，也可以依赖 `DisposeAsync()` 做兜底回滚：
-
-```csharp
-await using var uow = await unitOfWorkFactory.BeginAsync(cancellationToken);
-
 try
 {
     await orderRepository.InsertAsync(order);
+    await inventoryRepository.UpdateAsync(inventory);
     await uow.CommitAsync(cancellationToken);
 }
 catch
@@ -331,91 +225,119 @@ catch
 }
 ```
 
-### 自动工作单元入口
+`await using` 会兜底释放并尝试回滚未完成的事务。Commit 失败后不能修正内存状态并在原 UoW 上重试，必须丢弃当前 scope。
 
-自动事务入口由特性和执行管道表达：
+## 事件准备与提交流程
 
-```csharp
-[UnitOfWork]
-public async Task CreateOrderAsync(...)
-{
-}
+```text
+Begin：开启事务
+  → 收集并清空跟踪实体的事件
+  → 分类领域事件与集成事件
+  → 顺序执行领域事件 handler，继续收集新事件直到稳定
+  → 集成事件：启用 Outbox 时登记到原事务；默认模式暂存到提交后
+  → SaveChanges
+  → 物理 Commit
+  → 释放事务资源
+  → 默认模式尽力发送集成事件
+  → 按顺序执行 OnCompleted
 ```
 
-HTTP 场景可以由 Web 包提供 Filter 或 endpoint filter，在进入业务方法前开启工作单元，在业务方法成功后提交，异常时回滚。事件消费者场景应放在事件处理管道中，优先沉到 `Raindrop.EventBus.Core` 的通用 handler 执行逻辑里，让 RabbitMQ、MediatR、未来 Kafka 等适配器共享同一套工作单元规则。
+| 事件/操作 | 默认模式 | 启用 Outbox |
+|---|---|---|
+| 普通领域事件 | 保存前在当前调用中处理 | 同样保存前处理，只允许本地路由 |
+| 聚合集成事件 | 提交后尽力发送，失败只记日志 | 提交前冻结并同事务登记，不即时发送 |
+| 直接 `IEventBus.PublishAsync` 集成事件 | 即时按路由发送 | 在活动 UoW 中使用同一个登记器 |
+| `OnCompleted` | 确认提交后尽力执行 | 相同，不承担持久交付 |
 
-自动工作单元的规则和手动入口一致：事务必须在 handler/action 执行前开启，成功后提交，失败后回滚。事件消费者必须保持 `Ack` 晚于 `CommitAsync()`。
+框架最多处理 1024 轮非空事件批次，并检查取消。领域 handler 新增或修改的跟踪实体、再次产生的事件都纳入本次循环；只有集成事件的批次也会完整收集。超限或 handler 异常在提交前失败。没有事件时可以不注册 EventBus；存在事件但缺少总线时明确失败。
 
-### 关系型事务 seam
+例如，订单聚合产生 `OrderSubmitted`，本地 handler 修改库存并产生 `StockReduced`，后者继续在当前 UoW 中处理。循环预算不分析业务因果，也不提供业务幂等；业务需要自己避免事件互相触发及重复执行。消费端的幂等特性不等于本地领域 handler 自动获得幂等保护。
 
-`IUnitOfWork` 保持通用，只表达提交、回滚、完成回调和释放，不直接暴露关系型数据库事务。关系型数据库需要额外 seam：
+### 内部组件
+
+| 组件 | 职责 |
+|---|---|
+| `DomainEventBatch` | 纯分类，产生两类不可变事件批次，保持各自顺序 |
+| `DomainEventProcessor` | 取出实体事件、迭代调用本地处理链、累积并准备集成事件 |
+| `EventBusDispatch` | 缓存运行时类型到泛型 Publish 的委托，保留原始处理异常 |
+| `PreparedEventDispatch` | 保存默认模式的提交后尽力发送；Outbox 模式不携带后置集成发送 |
+| `EntityFrameworkCoreUnitOfWork<TDbContext>` | 管理生命周期、唯一物理事务、提交顺序和完成回调 |
+| `UnitOfWorkSession<TDbContext>` | 共享阶段、提交尝试身份及消息身份 |
+| `OutboxTransactionBinding` | 启用 Outbox 时约束 scope 内唯一活动 UoW，并校验实际 DbContext 归属 |
+
+纯分类和不可变批次负责数据组织，取出/清空事件、调用 handler、保存和提交保留显式副作用顺序。UoW 不承担路由解析、消息序列化或后台重试。[本地消息表与登记](transactional-outbox.md)维护 Outbox 的完整实现契约。
+
+## 提交结果与生命周期
+
+正常流程为 `Ready → Active → Preparing → Saving → Committing → Completing → Ready`，开启和资源清理期间还有内部过渡状态。操作必须顺序执行，不提供共享 DbContext 的跨线程同步。
+
+| 情况 | 处理 |
+|---|---|
+| 准备/保存失败或取消 | 保留原异常，尝试回滚、丢弃完成回调，实例进入 Failed |
+| 关系型物理 Commit 调用抛异常 | 报告 `UnitOfWorkCommitUnknownException`，进入 Unknown |
+| 已确认提交后的发送、回调或事务释放失败 | 只尝试记录诊断，不能改写已提交结果或重跑业务 |
+| 日志提供者抛异常 | 隔离日志故障，不遮蔽原始异常，不中断剩余清理/回调 |
+| 正常主动回滚 | 清空跟踪状态与回调，回到 Ready，可重新 Begin |
+| Failed/Unknown 后回滚 | 只清理资源，保持终态，必须丢弃 scope |
+
+Unknown 异常保留原 `CommitAttemptId`、已分配的 `MessageIds` 以及原异常。它们是核实线索，不是提交成功证明；回滚尝试或暂时查不到消息都不能证明此前没有提交，框架不自动重做业务。
+
+准备/提交期间拒绝重入 Begin、Commit、Rollback 和 Dispose。完成回调可在 Ready、Active、Preparing 阶段登记或清理，保存及后置阶段拒绝修改。Outbox 模式最终保存开始后关闭登记窗口，保存拦截器/回调中的迟到发布使本次提交失败，即使调用方捕获该异常也不能继续提交。
+
+启用 Outbox 时，同一 scope 只允许一个活动 Raindrop UoW，登记必须使用配置的消息 DbContext 的同一实例。其他 DbContext 的显式类型化 UoW 可顺序执行不含集成发布的事务；非泛型 UoW/Factory 别名不因发布事件自动切换上下文。Outbox 装配不一致或手工构造而缺少共享事务会话时拒绝 Begin。
+
+### 资源所有权
+
+UoW 只拥有自己开启的事务。DbContext 由创建它的 DI scope 或调用方释放，UoW 不提前释放借用的 DbContext。
+
+Rollback 和 Dispose 会清空 ChangeTracker，丢弃未完成的新增、修改和删除，防止借用的 DbContext 后续保存时重放已放弃的变更；已提交的数据不受影响。清理使用独立于已取消业务 token 的资源释放路径；回滚、释放或诊断失败不能遮蔽原提交异常，也不能跳过跟踪清理。
+
+## 关系型事务共享
 
 ```csharp
 public interface IRelationalUnitOfWork : IUnitOfWork
 {
     DbConnection Connection { get; }
-
     DbTransaction Transaction { get; }
 }
 ```
 
-EF Core 的工作单元实现可以同时实现 `IUnitOfWork` 和 `IRelationalUnitOfWork`。这样普通业务只依赖 `IUnitOfWork`，而混用 EF 仓储、ADO.NET、Dapper 的场景可以从当前工作单元中取出同一个 `DbConnection` 和 `DbTransaction`：
+EF Core UoW 实现该接口。需要与原生 SQL/Dapper 共用事务时，必须使用它暴露的同一连接和事务；只复制连接字符串再创建连接不能加入原事务。
 
 ```csharp
 await using var uow = await unitOfWorkFactory.BeginAsync(cancellationToken);
-
 var relational = (IRelationalUnitOfWork)uow;
-
-await dapperConnection.ExecuteAsync(
-    sql,
-    param,
-    transaction: relational.Transaction);
-
+await relational.Connection.ExecuteAsync(sql, parameters, relational.Transaction);
 await uow.CommitAsync(cancellationToken);
 ```
 
-这条 seam 不应该进入非关系型工作单元实现。非关系型适配器只需要实现 `IUnitOfWork`；关系型适配器在需要共享数据库事务时再额外实现 `IRelationalUnitOfWork`。
+上例的 `ExecuteAsync` 来自应用引用的 Dapper。非关系型 provider 不提供该关系型事务保证。
 
-### 当前设计方向
+## OnCompleted 与自动入口
 
-- `IUnitOfWork` 保留，作为所有工作单元实现的核心接口。
-- `IUnitOfWorkFactory` 作为手动开启入口。
-- EF Core 工作单元的事务开启时机从 `CommitAsync()` 前移到 `BeginAsync()`。
-- HTTP 和事件消费者通过 `[UnitOfWork]` 进入自动工作单元管道。
-
-## OnCompleted 回调
+`OnCompleted` 是内存中的尽力后置钩子，按注册顺序执行，每个回调失败后继续处理其余回调，随后清空列表。
 
 ```csharp
-// 注册
-var uow = repo.UnitOfWork;
-uow.OnCompleted(async () =>
-{
-    await _cacheService.InvalidateAsync("order-summary");
-    await _emailService.SendAsync(...);
-});
-
-await uow.CommitAsync();
-// 提交成功后依次执行 OnCompleted 注册的委托
-// 提交失败时不会执行
+await using var uow = await unitOfWorkFactory.BeginAsync(cancellationToken);
+uow.OnCompleted(() => cacheService.InvalidateAsync("order-summary"));
+await uow.CommitAsync(cancellationToken);
 ```
 
-`OnCompleted` 在数据库事务提交后执行，属于尽力而为的后置钩子。如果某个回调抛异常，工作单元只记录错误日志并继续执行后续回调；数据库不会回滚，`CommitAsync` 也不会把该异常继续抛给调用方。对 RabbitMQ 等消息消费者来说，OnCompleted 失败不会导致已经提交的数据被重新消费或无限重试。
+它适合不要求持久恢复的缓存失效等操作。需要持久保存的集成发布必须在活动 UoW 中登记，不能把 `OnCompleted` 当作可靠派发或结果通知存储。
 
-典型用途：
-- 缓存失效
-- 发送通知
-- 日志记录
-- 任何不要求与业务事务严格一致的后置操作
+RabbitMQ handler 上的 `[UnitOfWork]` 由消费执行器识别，在 handler 前 Begin，成功后 Commit；详见 [RabbitMQ 消费组件](rabbitmq-consumer-hostedservice.md)。HTTP Filter/EndpointFilter 自动 UoW 尚未实现，声明特性本身不会自动为 HTTP 开事务。
 
-## DI 注册
+## DI 注册与测试
 
 ```csharp
-// 内置自动扫描：DbContext + 工作单元 + 所有聚合根仓储，一步完成
-services.AddRaindropData<MyDbContext>(options =>
-    options.UseNpgsql(connectionString));
+services.AddRaindropData<MyDbContext>(options => options.UseNpgsql(connectionString));
 
-// 如果聚合根不在 DbContext 所在程序集，显式指定额外程序集
+// 聚合根不在 DbContext 所在程序集时，显式指定扫描程序集。
 services.AddRaindropData<MyDbContext>(
     options => options.UseNpgsql(connectionString),
     typeof(DomainEntity).Assembly);
 ```
+
+手动构造默认模式的 EF UoW 时，需要传入 `DomainEventProcessor`；Outbox 模式使用上述 DI 装配共享会话。关系型 provider 由 EF 能力判断，InMemory 不能验证物理事务保证。
+
+`test/Raindrop.Data.Tests` 覆盖仓储写入、规约、事件迭代、取消、回调、资源所有权、提交 Unknown、故障诊断和 Outbox 事务归属。集成测试连接配置见[工程规范](engineering-guidelines.md#11-测试约定)。

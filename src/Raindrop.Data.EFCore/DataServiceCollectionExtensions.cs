@@ -1,6 +1,7 @@
 using System.Reflection;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Logging;
 using Raindrop.Data.EFCore;
 using Raindrop.Data.Entities;
 using Raindrop.Data.Repository;
@@ -54,7 +55,13 @@ public static class DataServiceCollectionExtensions
         }
 
         // 注册工作单元（scoped，与 DbContext 生命周期一致）
-        services.TryAddScoped<EntityFrameworkCoreUnitOfWork<TDbContext>>();
+        services.TryAddScoped<DomainEventProcessor>();
+        services.TryAddScoped<UnitOfWorkSession<TDbContext>>();
+        services.TryAddScoped<EntityFrameworkCoreUnitOfWork<TDbContext>>(sp => new(
+            sp.GetRequiredService<TDbContext>(), sp.GetRequiredService<DomainEventProcessor>(),
+            sp.GetService<ILogger<EntityFrameworkCoreUnitOfWork<TDbContext>>>(),
+            sp.GetRequiredService<UnitOfWorkSession<TDbContext>>(),
+            sp.GetService<OutboxTransactionBinding>()));
         services.TryAddScoped<IUnitOfWork>(sp => sp.GetRequiredService<EntityFrameworkCoreUnitOfWork<TDbContext>>());
         services.TryAddScoped<IRelationalUnitOfWork>(sp => sp.GetRequiredService<EntityFrameworkCoreUnitOfWork<TDbContext>>());
         services.TryAddScoped<IUnitOfWorkFactory, EntityFrameworkCoreUnitOfWorkFactory<TDbContext>>();

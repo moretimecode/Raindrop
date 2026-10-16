@@ -185,7 +185,7 @@ public class RepositoryPostgreSqlIntegrationTests
         services.AddScoped(sp =>
         {
             var ctx = sp.GetRequiredService<TestDbContext>();
-            return new EntityFrameworkCoreUnitOfWork<TestDbContext>(ctx, sp.GetService<IEventBus>());
+            return new EntityFrameworkCoreUnitOfWork<TestDbContext>(ctx, new DomainEventProcessor(sp.GetService<IEventBus>()));
         });
         services.AddScoped<IUnitOfWork>(sp => sp.GetRequiredService<EntityFrameworkCoreUnitOfWork<TestDbContext>>());
         services.AddScoped<IUnitOfWorkFactory, EntityFrameworkCoreUnitOfWorkFactory<TestDbContext>>();
@@ -206,7 +206,7 @@ public class RepositoryPostgreSqlIntegrationTests
         services.AddScoped(sp =>
         {
             var ctx = sp.GetRequiredService<TestDbContext>();
-            return new EntityFrameworkCoreUnitOfWork<TestDbContext>(ctx, sp.GetService<IEventBus>());
+            return new EntityFrameworkCoreUnitOfWork<TestDbContext>(ctx, new DomainEventProcessor(sp.GetService<IEventBus>()));
         });
         services.AddScoped<IUnitOfWork>(sp => sp.GetRequiredService<EntityFrameworkCoreUnitOfWork<TestDbContext>>());
         services.AddScoped<IUnitOfWorkFactory, EntityFrameworkCoreUnitOfWorkFactory<TestDbContext>>();
@@ -269,7 +269,7 @@ public class RepositoryPostgreSqlIntegrationTests
     public async Task UpdateAsync_PersistsChanges()
     {
         await InitSchemaAsync();
-        await using var p = BuildProvider();
+        await using var p = BuildMediatRProvider();
         var repo = p.GetRequiredService<IRepository<Order, Guid>>();
         var id = Guid.NewGuid();
         await repo.InsertAsync(new Order(id, "PG-UPDATE"));
@@ -351,7 +351,7 @@ public class RepositoryPostgreSqlIntegrationTests
     public async Task GetListAsync_WithSpecification_FiltersAndOrders()
     {
         await InitSchemaAsync();
-        await using var p = BuildProvider();
+        await using var p = BuildMediatRProvider();
         var repo = p.GetRequiredService<IRepository<Order, Guid>>();
         var o1 = new Order(Guid.NewGuid(), "PG-C"); o1.Complete();
         var o2 = new Order(Guid.NewGuid(), "PG-A"); o2.Complete();

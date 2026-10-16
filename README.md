@@ -4,11 +4,20 @@ Raindrop 是一个小型 .NET 微服务框架骨架。
 
 ## 文档
 
-- [Raindrop 后端工程开发规范（草案）](docs/engineering-guidelines.md)
-- [Raindrop.Data 使用说明](docs/raindrop-data-usage.md)
-- [Raindrop.EventBus.Abstractions 设计说明](docs/event-bus-abstractions.md)
-- [事件总线 Outbox 与 RabbitMQ 死信重试设计预案](docs/event-bus-outbox-and-rabbitmq-retry-plan.md)
-- [工作单元与 RabbitMQ 消费者设计说明](docs/unit-of-work-and-rabbitmq-consumer.md)
+| 组件 | 设计与实现 |
+|---|---|
+| 领域模型 | [实体、聚合根、业务规则与分页](docs/raindrop-data-usage.md) |
+| 数据访问与事务 | [仓储、规约、UoW 与事件准备](docs/repository-and-unitofwork.md) |
+| CQRS | [命令查询、Bus、Pipeline 与验证](docs/cqrs.md) |
+| 事件总线 | [事件、路由、transport 与 Outbox 接缝](docs/event-bus-abstractions.md) |
+| RabbitMQ | [即时发布、消费、幂等、重试与死信](docs/rabbitmq-consumer-hostedservice.md) |
+| 本地消息表 | [Outbox 模型与同事务登记](docs/transactional-outbox.md) |
+| 应用配置 | [强类型配置、验证、热重载与 Apollo](docs/app-configuration-usage.md) |
+| 数据库配置源 | [SQL 与 EF Core 配置源](docs/database-app-configuration-usage.md) |
+| ASP.NET Core | [HTTP 管道、统一响应与可观测性](docs/aspnetcore-observability.md) |
+| 工程规范 | [分层、装配、编码与门禁](docs/engineering-guidelines.md) |
+
+Outbox 当前只完成业务与发送意图同事务保存，启用后消息保持 Pending；后台派发、发布确认和恢复尚未实现。组件文档以当前源码为准，不据此推定已发布 NuGet 包包含相同能力。
 
 ## 常用命令
 

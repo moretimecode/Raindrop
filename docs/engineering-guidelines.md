@@ -1,5 +1,6 @@
 # Raindrop 后端工程开发规范（草案）
 
+
 > 本文是 Raindrop 仓库以及基于 Raindrop 创建的 .NET 微服务的工程规范草案。
 > `AGENTS.md` 适合只放红线和指针，细则统一维护在本文。
 >
@@ -118,6 +119,7 @@ Raindrop 框架包的注册入口：
 | CQRS | `AddRaindropCQRS(applicationAssemblies)` |
 | FluentValidation | `AddValidation()` |
 | EF Core 数据访问 | `AddRaindropData<TDbContext>(...)` |
+| Outbox 同事务登记 | `AddRaindropOutbox<TDbContext>(...)`，配合模型映射 |
 | 本地事件总线 | `AddMediatRLocalEventBus(...)` |
 | RabbitMQ 事件总线 | `AddRabbitMqEventBus(...)` |
 | 应用配置 | `AddAppConfiguration(...)` 相关扩展 |
@@ -257,6 +259,8 @@ EF Core 规则：
 
 ## §7.5 领域事件与集成事件
 
+事件批次、提交结果和资源所有权见[仓储与工作单元](repository-and-unitofwork.md)；本地消息表、事务登记及能力边界见[Outbox](transactional-outbox.md)。组件文档描述当前源码，已发布包是否包含能力以对应版本源码为准。
+
 Raindrop 当前事件基础类型：
 
 | 类型 | 用途 |
@@ -279,7 +283,7 @@ Raindrop 当前事件基础类型：
 - 凡是要过 MQ 的事件必须实现 `IIntegrationEvent`。
 - RabbitMQ 路由使用 `RabbitMqEventAttribute` 声明。
 - 本地事件使用 `LocalEventAttribute` 或由 MediatR 本地事件总线补默认本地路由。
-- 同一事件需要同时本地处理和跨服务发布时，显式声明两种路由。
+- 默认即时发布支持显式声明两种路由；启用 Outbox 时用独立领域事件进行本地协调，集成事件必须只有明确远程目标，不允许混用本地路由。
 
 ## §8 消息总线
 

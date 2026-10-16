@@ -15,6 +15,18 @@ public sealed class RabbitMqEventTransport(IRabbitMqConnection connection) : IEv
         return route.Metadata is RabbitMqEventAttribute;
     }
 
+    public EventDeliveryTarget CaptureTarget(EventRoute route)
+    {
+        ArgumentNullException.ThrowIfNull(route);
+        if (route.Metadata is not RabbitMqEventAttribute target)
+            throw new InvalidOperationException("RabbitMQ 不能捕获此路由的发送目标。");
+        return new EventDeliveryTarget("rabbitmq", "1", JsonSerializer.Serialize(new
+        {
+            exchange = target.Exchange,
+            routingKey = target.RoutingKey
+        }));
+    }
+
     public async Task PublishAsync<TEvent>(
         TEvent eventData,
         EventRoute route,
